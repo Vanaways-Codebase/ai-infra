@@ -1,0 +1,21 @@
+# FastAPI and server
+fastapi
+uvicorn
+pydantic
+python-dotenv
+
+# Database
+sqlalchemy
+alembic
+
+# NLP and Analysis
+groq # Groq client for AI models
+python-multipart  # For handling form data
+
+# Testing
+pytest
+httpx
+
+# Utilities
+python-jose  # For JWT tokens
+passlib  # For password hashing
