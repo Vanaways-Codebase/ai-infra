@@ -14,7 +14,8 @@ from app.modules.transcription.service import (
     rate_call,
     extract_keywords,
     get_client_details,
-    make_transcription_readable
+    make_transcription_readable,
+_call_groq_api
 )
 
 # Configure logging
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Groq client
 try:
-    groq_client = groq.Groq(api_key="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")
+    groq_client = groq.Groq(api_key=settings.GROQ_API_KEY)
 except Exception as e:
     logger.error(f"Failed to initialize Groq client: {e}")
     groq_client = None
