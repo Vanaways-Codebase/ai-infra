@@ -59,6 +59,43 @@ def _call_groq_api(groq_client: groq.Groq, system_prompt: str, user_prompt: str,
     
     return None
 
+
+def make_transcription_readable(groq_client: groq.Groq, content: str) -> str:
+    """Convert raw transcription into a more readable Q&A format using Groq"""
+    system_prompt = "You are a transcription formatting assistant."
+    user_prompt = f"""
+    You are a transcription formatter.
+I will provide you with a raw call transcription between an agent and a customer.
+
+Your tasks are:
+
+Format the transcription into a Question–Answer style (Agent vs. Customer).
+
+Clean up filler words/repetitions while keeping the meaning intact.
+
+Ensure the output reads like a clear dialogue script with alternating lines.
+
+Do not add or remove information—just structure it for readability.
+Also Make it json formatted arrays of question and answers
+    
+    Raw Transcription:
+    {content}
+    
+    Formatted Transcription:
+    """
+    
+    result = _call_groq_api(groq_client, system_prompt, user_prompt,max_tokens=10000)
+    
+    if result:
+        try:
+            # Assuming the Groq response is a JSON array of Q&A pairs
+            formatted_transcription = json.dumps(result, indent=2)
+            return formatted_transcription
+        except (ValueError, TypeError) as e:
+            print(f"Error processing formatted transcription result: {e}")
+            return ""
+    return ""
+
 def analyze_sentiment(groq_client: groq.Groq, content: str) -> Tuple[str, float]:
     """Analyze sentiment of transcription using Groq"""
     system_prompt = "You are a sentiment analysis assistant that returns JSON only."
@@ -117,6 +154,38 @@ def rate_call(groq_client: groq.Groq, content: str) -> Tuple[int, str]:
     
     # Fallback to default rating if Groq fails
     return 5, "Unable to generate detailed rating explanation"
+
+
+def get_client_details(groq_client: groq.Groq, content: str) -> Dict[str, str]:
+    """Extract client details from transcription using Groq"""
+    system_prompt = "You are a client details extraction assistant that returns JSON only."
+    user_prompt = f"""
+    Extract client details from the following call transcription.
+    Return a JSON object with the following fields:
+    1. 'name': Client's name
+    2. 'email': Client's email address
+    
+    Transcription:
+    {content}
+    
+    JSON response:
+    """
+    
+    result = _call_groq_api(groq_client, system_prompt, user_prompt, temperature=0.1, max_tokens=150)
+    
+    if result:
+        try:
+            return {
+                "name": result.get("name", ""),
+                "email": result.get("email", "")
+            }
+        except (ValueError, TypeError) as e:
+            print(f"Error processing client details result: {e}")
+    
+    # Fallback to empty details if Groq fails
+    return {"name": "", "email": ""}
+
+
 
 def extract_keywords(groq_client: groq.Groq, content: str) -> Dict[str, int]:
     """Extract keywords from text content

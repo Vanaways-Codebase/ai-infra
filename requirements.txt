@@ -8,14 +8,17 @@ python-dotenv
 sqlalchemy
 alembic
 
+
 # NLP and Analysis
-groq # Groq client for AI models
-python-multipart  # For handling form data
+groq
+python-multipart
+kafka-python
+requests
 
 # Testing
 pytest
 httpx
 
 # Utilities
-python-jose  # For JWT tokens
-passlib  # For password hashing
+python-jose
+passlib

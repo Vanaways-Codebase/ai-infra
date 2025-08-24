@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     # Security Settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+
+    KAFKA_BROKERS: str = os.getenv("KAFKA_BROKERS", "localhost:9092")
+    KAFKA_CLIENT_ID: str = os.getenv("KAFKA_CLIENT_ID", "vims-backend")
+    KAFKA_GROUP_ID: str = os.getenv("KAFKA_GROUP_ID", "vims-transcription-workers")
+    KAFKA_TRANSCRIPTION_TOPIC: str = os.getenv("KAFKA_TRANSCRIPTION_TOPIC", "transcription-jobs")
+    KAFKA_CALL_UPDATE_TOPIC: str = os.getenv("KAFKA_CALL_UPDATE_TOPIC", "call-update-jobs")
+
     
     class Config:
         env_file = ".env"
