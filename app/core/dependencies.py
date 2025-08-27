@@ -7,4 +7,5 @@ def get_groq_client():
     
     # Initialize Groq client
     client = groq.Groq(api_key=settings.GROQ_API_KEY)
+    
     return client

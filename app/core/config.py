@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
     
     # Groq API Settings
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    # Read GROQ_API_KEY and strip surrounding quotes if present (some .env files include quotes)
+    GROQ_API_KEY: str = (os.getenv("GROQ_API_KEY", "") or "").strip().strip('"').strip("'")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama3-70b-8192")
     
     # Security Settings
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
     KAFKA_TRANSCRIPTION_TOPIC: str = os.getenv("KAFKA_TRANSCRIPTION_TOPIC", "transcription-jobs")
     KAFKA_CALL_UPDATE_TOPIC: str = os.getenv("KAFKA_CALL_UPDATE_TOPIC", "call-update-jobs")
 
+    RINGCENTRAL_CLIENT_ID: str = os.getenv("RINGCENTRAL_CLIENT_ID", "")
+    RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
+    RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
+
+
+    
     
     class Config:
         env_file = ".env"

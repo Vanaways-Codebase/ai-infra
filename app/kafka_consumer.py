@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize Groq client
 try:
+    if not settings.GROQ_API_KEY:
+        logger.error("GROQ_API_KEY is not set in environment; Groq client will not be initialized.")
     groq_client = groq.Groq(api_key=settings.GROQ_API_KEY)
 except Exception as e:
     logger.error(f"Failed to initialize Groq client: {e}")
@@ -78,12 +80,13 @@ def download_audio(url: str) -> str | None:
     try:
         # For RingCentral, always retrieve a fresh access token
         # You may want to cache this if your token is long-lived
-        client_id = os.getenv("RINGCENTRAL_CLIENT_ID")
-        jwt = os.getenv("RINGCENTRAL_JWT")
+        client_id = settings.RINGCENTRAL_CLIENT_ID
+        client_secret = settings.RINGCENTRAL_CLIENT_SECRET
+        jwt = settings.RINGCENTRAL_JWT
         access_token = None
         if client_id and jwt:
             try:
-                access_token = get_ringcentral_access_token(client_id, jwt)
+                access_token = get_ringcentral_access_token(client_id,client_secret ,jwt)
             except Exception as e:
                 logger.error(f"Failed to retrieve RingCentral access token: {e}")
         # Remove any ?access_token= from URL if present
@@ -114,7 +117,7 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Failed to download audio from {url}: {e}")
         return None
 
-def transcribe_audio(file_path: str) -> str | None:
+def transcribe_audio(groq_client: groq.Groq, file_path: str) -> str | None:
     """Transcribes audio using Groq's Whisper model."""
     if not groq_client:
         logger.error("Groq client not available for transcription.")
@@ -124,7 +127,8 @@ def transcribe_audio(file_path: str) -> str | None:
             transcription = groq_client.audio.transcriptions.create(
                 file=(os.path.basename(file_path), file.read()),
                 model="whisper-large-v3-turbo", # Or "whisper-large-v3-turbo" if available/preferred
-                response_format="verbose_json",
+                response_format="verbose_json"
+                
             )
         logger.info("Audio transcribed successfully.")
         return transcription.text
@@ -157,7 +161,7 @@ def process_transcription_job(message: dict, producer: KafkaProducer):
             return # Error already logged
 
         # 2. Transcribe audio
-        call_transcript = transcribe_audio(audio_file_path)
+        call_transcript = transcribe_audio(groq_client,file_path=audio_file_path)
         #Make Transcription Readable in Question Answer format using Groq
         
         if not call_transcript:

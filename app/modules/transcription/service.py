@@ -64,20 +64,27 @@ def make_transcription_readable(groq_client: groq.Groq, content: str) -> str:
     """Convert raw transcription into a more readable Q&A format using Groq"""
     system_prompt = "You are a transcription formatting assistant."
     user_prompt = f"""
-    You are a transcription formatter.
+   You are a transcription formatter.
 I will provide you with a raw call transcription between an agent and a customer.
 
 Your tasks are:
 
-Format the transcription into a Question–Answer style (Agent vs. Customer).
+Format the transcription into a Agent-Customer style (Agent vs. Customer).
+Agent: Hello
+Customer: HI
+Format should be like this
 
 Clean up filler words/repetitions while keeping the meaning intact.
 
 Ensure the output reads like a clear dialogue script with alternating lines.
 
 Do not add or remove information—just structure it for readability.
-Also Make it json formatted arrays of question and answers
-    
+Also Make it json formatted arrays of Agent and Customer
+JSON FORMATTED
+IT SHOULD BE A PROPER CONVERSATION BETEWEEN TWO PERSON
+jus dont the Add the SPeaker key
+and the communication should be like two and fro
+
     Raw Transcription:
     {content}
     

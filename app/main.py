@@ -53,19 +53,19 @@ api_prefix = os.getenv("API_PREFIX", "/api/v1")
 app.include_router(api_router, prefix=api_prefix)
 
 # Custom OpenAPI and documentation endpoints
-def run_kafka_consumer():
-    """Wrapper function to run the Kafka consumer."""
-    print("Starting Kafka consumer in a background thread...")
-    consume_messages()
+# def run_kafka_consumer():
+#     """Wrapper function to run the Kafka consumer."""
+#     print("Starting Kafka consumer in a background thread...")
+#     consume_messages()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # On startup, run the Kafka consumer in a daemon thread
-    consumer_thread = threading.Thread(target=run_kafka_consumer, daemon=True)
-    consumer_thread.start()
-    yield
-    # On shutdown
-    print("Shutting down application.")
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # On startup, run the Kafka consumer in a daemon thread
+#     consumer_thread = threading.Thread(target=run_kafka_consumer, daemon=True)
+#     consumer_thread.start()
+#     yield
+#     # On shutdown
+#     print("Shutting down application.")
 
 
 # Root endpoint

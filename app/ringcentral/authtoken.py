@@ -1,7 +1,7 @@
 import requests
 import os
-
-def get_ringcentral_access_token(client_id: str, jwt: str, url: str = "https://platform.ringcentral.com/restapi/oauth/token") -> str:
+import base64
+def get_ringcentral_access_token(client_id:str,client_secret: str,jwt_token:str ) -> str:
     """
     Retrieves a RingCentral access token using JWT authentication.
     Args:
@@ -11,18 +11,36 @@ def get_ringcentral_access_token(client_id: str, jwt: str, url: str = "https://p
     Returns:
         The access token string if successful, else raises an exception.
     """
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    data = {
-        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion": jwt,
-        "client_id": client_id
-    }
-    response = requests.post(url, headers=headers, data=data)
-    response.raise_for_status()
-    token_json = response.json()
-    return token_json.get("access_token")
+    try:
+        # Create basic auth header
+        credentials = f"{client_id}:{client_secret}"
+        auth_header = base64.b64encode(credentials.encode()).decode()
+        
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': f'Basic {auth_header}'
+        }
+        
+        data = {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'assertion': jwt_token
+        }
+        
+        response = requests.post(
+            'https://platform.ringcentral.com/restapi/oauth/token',
+            headers=headers,
+            data=data
+        )
+        response.raise_for_status()
+        
+        token_data = response.json()
+        return token_data['access_token']
+        
+    except requests.RequestException as e:
+        print(f"Error getting access token: {e}")
+        if hasattr(e, 'response') and e.response:
+            print(f"Response: {e.response.text}")
+        raise
 
 # Example usage:
 # client_id = os.getenv("RINGCENTRAL_CLIENT_ID")
