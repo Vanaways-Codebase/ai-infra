@@ -1,24 +1,7 @@
-# FastAPI and server
-fastapi
-uvicorn
-pydantic
-python-dotenv
-
-# Database
-sqlalchemy
-alembic
-
-
-# NLP and Analysis
-groq
-python-multipart
-kafka-python
+soundcard
+numpy
+openai
 requests
-
-# Testing
-pytest
-httpx
-
-# Utilities
-python-jose
-passlib
+python-dotenv
+websocket-client
+tkinter

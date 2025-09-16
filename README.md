@@ -1,60 +1,53 @@
-# Call Transcription Analysis API
+# AI Infra: Call Monitoring & Transcription
 
-A FastAPI backend for analyzing call transcriptions between users and agents.
+This project provides tools for monitoring agent calls and transcribing audio using OpenAI's API. It includes:
+- **call_transcriber_app.py**: A GUI application for monitoring agent calls and live transcription.
+- **call_monitoring.py**: A command-line tool for monitoring RingCentral calls and streaming audio.
+- **Tr2asncr.py**: A dual audio transcriber for system and microphone audio.
 
-## Features
-
-- Sentiment Analysis (positive or negative)
-- Call Rating (out of 10)
-- Keywords Extraction and Frequency Analysis
-
-## Project Structure
-
+## Requirements
+Install dependencies with:
 ```
-project_root/
-├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI application entry point
-│   ├── core/                   # Core components
-│   │   ├── __init__.py
-│   │   ├── config.py           # Configuration settings
-│   │   ├── dependencies.py     # Shared dependencies (DB connection, etc.)
-│   │   └── middleware.py       # Global middleware
-│   ├── api.py                  # API router aggregation
-│   └── modules/                # Business logic modules
-│       ├── __init__.py
-│       ├── transcription/      # Transcription analysis module
-│       │   ├── __init__.py
-│       │   ├── models.py       # Database models
-│       │   ├── schemas.py      # Pydantic schemas
-│       │   ├── service.py      # Business logic
-│       │   └── routes.py       # FastAPI routes/endpoints
-│       └── user/               # User module
-│           ├── __init__.py
-│           ├── models.py
-│           ├── schemas.py
-│           ├── service.py
-│           └── routes.py
-├── functions/                  # Azure Functions (when needed)
-├── tests/                      # Test suite
-├── .env                        # Environment variables
-├── requirements.txt            # Dependencies
-└── README.md
+pip install -r requirements.txt
 ```
 
 ## Setup
+1. Create a `.env` file in the project directory with the following variables:
+```
+RINGCENTRAL_CLIENT_ID=your_client_id
+RINGCENTRAL_CLIENT_SECRET=your_client_secret
+RINGCENTRAL_JWT_TOKEN=your_jwt_token
+RINGCENTRAL_SERVER_URL=https://platform.ringcentral.com
+OPENAI_API_KEY=your_openai_api_key
+```
+2. Install dependencies as above.
 
-1. Clone the repository
-2. Create a virtual environment: `python -m venv venv`
-3. Activate the virtual environment:
-   - Windows: `venv\Scripts\activate`
-   - Unix/MacOS: `source venv/bin/activate`
-4. Install dependencies: `pip install -r requirements.txt`
-5. Set up environment variables in `.env`
-6. Run the application: `uvicorn app.main:app --reload`
+## How to Run
+### 1. GUI Call Monitor & Transcriber
+```
+python call_transcriber_app.py
+```
+- Enter the agent extension in the GUI and click "Start Monitoring".
+- The app will display live status and transcriptions.
 
-## API Documentation
+### 2. Command-Line Call Monitoring
+```
+python call_monitoring.py
+```
+- Monitors RingCentral calls and streams audio for supervision.
 
-Once the application is running, you can access the API documentation at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+### 3. Dual Audio Transcriber
+```
+python Tr2asncr.py
+```
+- Transcribes both system and microphone audio using OpenAI.
+
+## How It Works
+- **call_transcriber_app.py**: Uses RingCentral API to monitor agent calls, records audio, and transcribes using OpenAI. The GUI displays live status and transcriptions.
+- **call_monitoring.py**: Authenticates with RingCentral, monitors active calls, and streams audio for supervision.
+- **Tr2asncr.py**: Records system and microphone audio, sends to OpenAI for transcription, and prints results.
+
+## Notes
+- Ensure your API keys and credentials are set in `.env`.
+- For GUI, make sure your system supports `tkinter`.
+- For audio, ensure your system supports `soundcard` and has the necessary drivers.
