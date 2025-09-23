@@ -224,7 +224,7 @@ def _generate_analysis_outputs(transcript_text: str) -> Dict[str, Any]:
         "sentiment_analysis -> number 1-10; "
         "customer_rating -> number 1-10; "
         "call_type -> one of ['High Score','Hot Lead','Customer Issue','General Inquiry','Follow Up','Other']; "
-        "summary -> string <= 100 characters; "
+        "short_summary -> string <= 100 characters; "
         "vehicle_tags -> object mapping lowercase vehicle terms to their frequency counts as strings; "
         "contact_extraction -> object with keys name and email (empty string if missing)."
     )
