@@ -60,5 +60,5 @@ Once the application is running, you can access the API documentation at:
 - ReDoc: `http://localhost:8000/redoc`
 
 
-
- pm2 start bash -- -c "source /home/azureuser/ai-infra/vanaways/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+VM
+pm2 start bash -- -c "source /home/azureuser/ai-infra/vanaways/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
