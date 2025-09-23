@@ -32,15 +32,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         response_body, response_bytes = await self._extract_response_body(response)
-        duration_min = (time.perf_counter() - start_time) / 60
+        elapsed = time.perf_counter() - start_time
+        duration_ms = elapsed * 1000
+        duration_min = elapsed / 60
         logger.info(
-            "\nCompleted %s %s status=%s duration_min=%.2f",
+            "Completed %s %s status=%s duration_ms=%.2f duration_min=%.4f body=%s",
             method,
             request.url.path,
             response.status_code,
+            duration_ms,
             duration_min,
-            # response_body,
-            "\n"
+            response_body,
         )
 
         headers = dict(response.headers)

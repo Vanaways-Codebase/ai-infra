@@ -1,6 +1,7 @@
 # FastAPI and server
 fastapi
 uvicorn
+gunicorn
 pydantic
 python-dotenv
 
