@@ -5,7 +5,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 from app.core.config import settings
@@ -13,6 +13,11 @@ from app.core.openai_client import get_openai_client
 
 
 logger = logging.getLogger(__name__)
+
+
+STRUCTURED_TRANSCRIPT_MODEL = "gpt-4.1-2025-04-14"
+# Prefer a higher-context model when the base request overflows the token window
+STRUCTURED_TRANSCRIPT_FALLBACK_MODEL = "gpt-4.1"
 
 
 @dataclass
@@ -132,14 +137,6 @@ def _generate_structured_transcript(transcript_text: str, segments: List[Dict[st
     if not transcript_text.strip():
         return []
 
-    model = (settings.OPENAI_INSIGHTS_MODEL or "").strip() or "gpt-4o-mini"
-    # Limit payload size to avoid excessive context for long calls
-    trimmed_segments = segments[:120] if segments else []
-    payload = {
-        "segments": trimmed_segments,
-        "transcript": transcript_text[:12000],
-        "instructions": "Label each utterance as agent or customer and preserve chronological order.",
-    }
     system_prompt = (
         "You transform call transcripts into structured JSON. Return a JSON array where each element has the "
         "keys speaker, message, start, end. Speaker must be either agent or customer. If unsure, infer from "
@@ -147,49 +144,88 @@ def _generate_structured_transcript(transcript_text: str, segments: List[Dict[st
         "otherwise estimate monotonically increasing floats. Message should contain the cleaned utterance text."
     )
 
-    raw_text = _call_openai_json(
-        model=model,
+    primary_payload = {
+        "segments": segments[:120] if segments else [],
+        "transcript": transcript_text[:12000],
+        "instructions": "Label each utterance as agent or customer and preserve chronological order, and if call gets hold or music or anything else, note that as well.",
+    }
+
+    raw_text, error = _call_openai_json_with_error(
+        model=STRUCTURED_TRANSCRIPT_MODEL,
         system_prompt=system_prompt,
-        user_content=json.dumps(payload, ensure_ascii=False),
+        user_content=json.dumps(primary_payload, ensure_ascii=False),
         enforce_json_object=False,
     )
 
-    if not raw_text:
-        return []
+    if not raw_text and _is_context_length_error(error):
+        logger.info("Structured transcript request exceeded base context; retrying with fallback model.")
+        fallback_payload = {
+            "segments": segments,
+            "transcript": transcript_text,
+            "instructions": primary_payload["instructions"],
+        }
+        raw_text, error = _call_openai_json_with_error(
+            model=STRUCTURED_TRANSCRIPT_FALLBACK_MODEL,
+            system_prompt=system_prompt,
+            user_content=json.dumps(fallback_payload, ensure_ascii=False),
+            enforce_json_object=False,
+        )
 
-    try:
-        parsed = json.loads(raw_text)
-    except json.JSONDecodeError:
-        return []
+    parsed_items: List[Dict[str, Any]] = []
+    if raw_text:
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            if "utterances" in parsed and isinstance(parsed["utterances"], list):
+                parsed = parsed["utterances"]
+            else:
+                parsed = [value for value in parsed.values() if isinstance(value, dict)]
+        if isinstance(parsed, list):
+            parsed_items = [item for item in parsed if isinstance(item, dict)]
 
-    if isinstance(parsed, dict):
-        if "utterances" in parsed and isinstance(parsed["utterances"], list):
-            parsed = parsed["utterances"]
-        else:
-            parsed = list(parsed.values())
+    structured = _build_structured_entries(parsed_items)
+    if structured:
+        return structured
 
-    if not isinstance(parsed, list):
-        return []
+    structured_from_segments = _build_structured_entries(_segment_items(segments))
+    if structured_from_segments:
+        return structured_from_segments
 
+    return _build_structured_entries(_transcript_text_items(transcript_text))
+
+
+def _build_structured_entries(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     base_time = datetime.now(timezone.utc)
     structured: List[Dict[str, Any]] = []
-    for idx, item in enumerate(parsed):
+    for idx, item in enumerate(items):
         if not isinstance(item, dict):
             continue
-        speaker = str(item.get("speaker", "unknown")).strip().lower()
-        if speaker not in {"agent", "customer"}:
-            speaker = "agent" if idx % 2 == 0 else "customer"
-        message = _stringify_insight(item.get("message")).strip()
+        raw_message = item.get("message")
+        if raw_message is None:
+            raw_message = item.get("text")
+        message = _stringify_insight(raw_message).strip()
         if not message:
             continue
+
+        speaker = str(item.get("speaker", "")).strip().lower()
+        if speaker not in {"agent", "customer"}:
+            speaker = "agent" if idx % 2 == 0 else "customer"
+
         start_val = item.get("start")
         timestamp_iso = None
         if isinstance(start_val, (int, float)):
             timestamp_iso = _offset_to_iso(base_time, float(start_val))
         else:
             timestamp_iso = _coerce_iso_timestamp(item.get("timestamp")) or _coerce_iso_timestamp(item.get("time"))
+            if not timestamp_iso and isinstance(item.get("timestamp"), dict):
+                ts = item.get("timestamp", {})
+                timestamp_iso = _coerce_iso_timestamp(ts.get("$date")) or _coerce_iso_timestamp(ts.get("iso"))
+
         if not timestamp_iso:
             timestamp_iso = _offset_to_iso(base_time, idx * 5.0)
+
         structured.append(
             {
                 "speaker": speaker,
@@ -199,6 +235,43 @@ def _generate_structured_transcript(transcript_text: str, segments: List[Dict[st
         )
 
     return structured
+
+
+def _segment_items(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for segment in segments or []:
+        if not isinstance(segment, dict):
+            continue
+        message = _stringify_insight(segment.get("text")).strip()
+        if not message:
+            continue
+        item: Dict[str, Any] = {
+            "message": message,
+            "start": segment.get("start"),
+        }
+        if "speaker" in segment:
+            item["speaker"] = segment.get("speaker")
+        items.append(item)
+    return items
+
+
+def _transcript_text_items(transcript_text: str) -> List[Dict[str, Any]]:
+    cleaned = transcript_text.strip()
+    if not cleaned:
+        return []
+    lines = [line.strip() for line in cleaned.replace("\r\n", "\n").split("\n") if line.strip()]
+    if not lines:
+        lines = [cleaned]
+    items: List[Dict[str, Any]] = []
+    for idx, line in enumerate(lines):
+        items.append(
+            {
+                "speaker": "agent" if idx % 2 == 0 else "customer",
+                "message": line,
+                "start": float(idx * 5),
+            }
+        )
+    return items
 
 
 def _generate_analysis_outputs(transcript_text: str) -> Dict[str, Any]:
@@ -380,20 +453,21 @@ def _coerce_iso_timestamp(value: Any) -> Optional[str]:
     return None
 
 
-def _call_openai_json(
+def _call_openai_json_with_error(
     *,
     model: str,
     system_prompt: str,
     user_content: str,
     enforce_json_object: bool,
     temperature: float = 0.3,
-) -> str:
+) -> Tuple[str, Optional[BaseException]]:
     client = get_openai_client()
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 
+    last_error: Optional[BaseException] = None
     try:
         kwargs: Dict[str, Any] = {
             "model": model,
@@ -405,13 +479,14 @@ def _call_openai_json(
         response = client.responses.create(**kwargs)
         text = _extract_output_text(response)
         if text:
-            return text
+            return text, None
     except TypeError as exc:
         logger.debug("Responses.create type error: %s", exc)
+        last_error = exc
     except Exception as exc:
         logger.warning("Responses API failed (%s). Falling back to chat completions.", exc)
+        last_error = exc
 
-    # Fallback to chat completions
     try:
         chat_response = client.chat.completions.create(  # type: ignore[attr-defined]
             model=model,
@@ -422,10 +497,41 @@ def _call_openai_json(
             temperature=temperature,
         )
         if chat_response.choices:
-            return chat_response.choices[0].message.content or ""
+            return chat_response.choices[0].message.content or "", None
     except Exception as exc:
         logger.error("Chat completions fallback failed: %s", exc)
-    return ""
+        return "", exc
+    return "", last_error
+
+
+def _call_openai_json(
+    *,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    enforce_json_object: bool,
+    temperature: float = 0.3,
+) -> str:
+    text, _ = _call_openai_json_with_error(
+        model=model,
+        system_prompt=system_prompt,
+        user_content=user_content,
+        enforce_json_object=enforce_json_object,
+        temperature=temperature,
+    )
+    return text
+
+
+def _is_context_length_error(error: Optional[BaseException]) -> bool:
+    if not error:
+        return False
+    message = str(error).lower()
+    if "maximum context length" in message or "context length" in message or "too many tokens" in message:
+        return True
+    code = getattr(error, "code", "")
+    if isinstance(code, str) and "context" in code.lower():
+        return True
+    return False
 
 
 def _extract_output_text(response: Any) -> str:

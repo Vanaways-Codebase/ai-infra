@@ -58,3 +58,7 @@ project_root/
 Once the application is running, you can access the API documentation at:
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
+
+
+
+ pm2 start bash -- -c "source /home/azureuser/ai-infra/vanaways/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
