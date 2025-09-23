@@ -6,14 +6,14 @@ pydantic
 python-dotenv
 
 # Database
-sqlalchemy
-alembic
+# sqlalchemy
+# alembic
 
 
 # NLP and Analysis
-groq
+# groq
 python-multipart
-kafka-python
+# kafka-python
 requests
 assemblyai==0.44.3
 ringcentral==0.9.2
