@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
 from app.api import api_router
-from app.kafka_consumer import consume_messages
+# from app.kafka_consumer import consume_messages
+from app.middleware import RequestLoggingMiddleware
 
 # Import API router
 from app.api import api_router
@@ -17,26 +18,26 @@ load_dotenv()
 
 
 
-def run_kafka_consumer():
-    """Wrapper function to run the Kafka consumer."""
-    print("Starting Kafka consumer in a background thread...")
-    consume_messages()
+# def run_kafka_consumer():
+#     """Wrapper function to run the Kafka consumer."""
+#     print("Starting Kafka consumer in a background thread...")
+#     consume_messages()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # On startup, run the Kafka consumer in a daemon thread
-    consumer_thread = threading.Thread(target=run_kafka_consumer, daemon=True)
-    consumer_thread.start()
-    yield
-    # On shutdown
-    print("Shutting down application.")
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # On startup, run the Kafka consumer in a daemon thread
+#     consumer_thread = threading.Thread(target=run_kafka_consumer, daemon=True)
+#     consumer_thread.start()
+#     yield
+#     # On shutdown
+#     print("Shutting down application.")
 
 # Create FastAPI app
 app = FastAPI(
     title="Call Transcription Analysis API",
     description="API for analyzing call transcriptions between users and agents",
     version="0.1.0",
-    lifespan=lifespan
+    # lifespan=lifespan
 )
 
 # Configure CORS
@@ -47,6 +48,9 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# Request/response logging
+app.add_middleware(RequestLoggingMiddleware)
 
 # Include API router
 api_prefix = os.getenv("API_PREFIX", "/api/v1")

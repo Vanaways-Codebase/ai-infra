@@ -6,7 +6,7 @@ import requests
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError
 import groq
-from app.ringcentral.authtoken import get_ringcentral_access_token
+# from app.ringcentral.authtoken import get_ringcentral_access_token
 
 from app.core.config import settings
 from app.modules.transcription.service import (

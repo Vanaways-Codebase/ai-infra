@@ -34,8 +34,10 @@ class Settings(BaseSettings):
     RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
     RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
 
-
-    
+    # OpenAI Settings
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")    
+    OPENAI_TRANSCRIPTION_MODEL: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")
+    OPENAI_INSIGHTS_MODEL: str = os.getenv("OPENAI_INSIGHTS_MODEL", "gpt-4o-mini")
     
     class Config:
         env_file = ".env"
