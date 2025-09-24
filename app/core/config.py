@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
     RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
 
+    # Azure Event Hubs
+    AZURE_EVENTHUB_CONNECTION_STRING: str = os.getenv("AZURE_EVENTHUB_CONNECTION_STRING", "")
+    AZURE_EVENTHUB_NAME: str = os.getenv("AZURE_EVENTHUB_NAME", "")
+    AZURE_EVENTHUB_CONSUMER_GROUP: str = os.getenv("AZURE_EVENTHUB_CONSUMER_GROUP", "$Default")
+    AZURE_EVENTHUB_PREFETCH: int = int(os.getenv("AZURE_EVENTHUB_PREFETCH", "300"))
+
     # OpenAI Settings
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")    
     OPENAI_TRANSCRIPTION_MODEL: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")

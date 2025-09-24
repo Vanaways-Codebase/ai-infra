@@ -72,6 +72,7 @@ app.include_router(api_router, prefix=api_prefix)
 #     print("Shutting down application.")
 
 
+
 # Root endpoint
 @app.get("/")
 async def root():
@@ -81,7 +82,12 @@ async def root():
         "version": app.version,
     }
 
+# Health check endpoint for Azure Web App
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
 # Run the application
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
