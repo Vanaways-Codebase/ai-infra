@@ -2,6 +2,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,8 @@ class TranscriptionResult:
     call_summary: Optional[str] = None
     call_analysis: Optional[str] = None
     buyer_intent: Optional[str] = None
+    buyer_intent_score: Optional[float] = None
+    buyer_intent_reason: Optional[str] = None
     agent_recommendation: Optional[str] = None
     structured_transcript: Optional[List[Dict[str, Any]]] = None
     keywords: Optional[List[str]] = None
@@ -75,7 +78,8 @@ def _transcribe_from_path(path: str) -> TranscriptionResult:
     analysis_suite = _generate_analysis_outputs(text)
     summary = _stringify_insight(insights.get("summary"))
     analysis = _stringify_insight(insights.get("analysis"))
-    buyer_intent = _stringify_insight(insights.get("buyer_intent"))
+    buyer_intent_reason = _stringify_insight(insights.get("buyer_intent_reason"))
+    buyer_intent_score = _coerce_float(insights.get("buyer_intent_score"))
     agent_reco = _stringify_insight(insights.get("agent_recommendation"))
     return TranscriptionResult(
         status="completed",
@@ -84,7 +88,9 @@ def _transcribe_from_path(path: str) -> TranscriptionResult:
         id=getattr(transcript, "id", None),
         call_summary=summary,
         call_analysis=analysis,
-        buyer_intent=buyer_intent,
+        buyer_intent=buyer_intent_reason,
+        buyer_intent_score=buyer_intent_score,
+        buyer_intent_reason=buyer_intent_reason,
         agent_recommendation=agent_reco,
         structured_transcript=structured_transcript,
         keywords=analysis_suite.get("keywords"),
@@ -100,16 +106,24 @@ def _transcribe_from_path(path: str) -> TranscriptionResult:
 
 def _generate_call_insights(transcript_text: str) -> dict:
     if not transcript_text.strip():
-        return {"summary": "", "analysis": "", "buyer_intent": "", "agent_recommendation": ""}
+        return {
+            "summary": "",
+            "analysis": "",
+            "buyer_intent_score": 0,
+            "buyer_intent_reason": "",
+            "agent_recommendation": "",
+        }
 
     model = (settings.OPENAI_INSIGHTS_MODEL or "").strip() or "gpt-4o-mini"
     # Keep prompt concise to control latency and cost while ensuring structured output
     prompt = (
-        "You are an expert call analyst. Given the call transcript, provide a concise JSON object with the "
-        "keys: summary, analysis, buyer_intent, agent_recommendation. Summary must be 3-5 bullet sentences "
-        "covering the call flow. Analysis should capture tone, objections, and pivotal moments. Buyer intent "
-        "should classify likelihood to purchase and cite supporting evidence. Agent recommendation must list "
-        "the top next actions for the agent. Keep responses under 120 words per field and avoid markdown."
+        "You are an expert sales analyst. Given the transcript, decide whether the customer expresses interest "
+        "in purchasing or continuing a service. Return JSON with keys: summary (string, 3-5 bullet sentences), "
+        "analysis (string highlighting tone, objections, pivotal moments), buyer_intent_score (integer 1-10), "
+        "buyer_intent_reason (string explaining the score and explicitly mention if a sale or renewal occurs), "
+        "agent_recommendation (string with next best actions). When the call contains a confirmed purchase, "
+        "renewal, or strong buying signals, the score must be 8-10. If the caller declines, requests support only, "
+        "or shows no interest, the score must be 1-3. Use 4-7 for uncertain or mixed interest."
     )
 
     raw_text = _call_openai_json(
@@ -123,12 +137,20 @@ def _generate_call_insights(transcript_text: str) -> dict:
         return {"summary": "", "analysis": "", "buyer_intent": "", "agent_recommendation": ""}
 
     try:
-        return json.loads(raw_text)
+        data = json.loads(raw_text)
+        if isinstance(data, dict):
+            if "buyer_intent_score" in data:
+                try:
+                    data["buyer_intent_score"] = int(data["buyer_intent_score"])
+                except (TypeError, ValueError):
+                    data["buyer_intent_score"] = 0
+            return data
     except json.JSONDecodeError:
         return {
             "summary": raw_text,
             "analysis": "",
-            "buyer_intent": "",
+            "buyer_intent_score": 0,
+            "buyer_intent_reason": "",
             "agent_recommendation": "",
         }
 
@@ -185,6 +207,8 @@ def _generate_structured_transcript(transcript_text: str, segments: List[Dict[st
         if isinstance(parsed, list):
             parsed_items = [item for item in parsed if isinstance(item, dict)]
 
+    parsed_items = _expand_combined_dialogue(parsed_items)
+
     structured = _build_structured_entries(parsed_items)
     if structured:
         return structured
@@ -199,6 +223,7 @@ def _generate_structured_transcript(transcript_text: str, segments: List[Dict[st
 def _build_structured_entries(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     base_time = datetime.now(timezone.utc)
     structured: List[Dict[str, Any]] = []
+    turn_index = 0
     for idx, item in enumerate(items):
         if not isinstance(item, dict):
             continue
@@ -209,30 +234,43 @@ def _build_structured_entries(items: Iterable[Dict[str, Any]]) -> List[Dict[str,
         if not message:
             continue
 
-        speaker = str(item.get("speaker", "")).strip().lower()
-        if speaker not in {"agent", "customer"}:
-            speaker = "agent" if idx % 2 == 0 else "customer"
+        default_speaker = str(item.get("speaker", "")).strip().lower()
+        if default_speaker not in {"agent", "customer"}:
+            default_speaker = "agent" if (turn_index % 2 == 0) else "customer"
+
+        splits = _split_message_into_turns(message, default_speaker)
+        if not splits:
+            splits = [(default_speaker, message)]
 
         start_val = item.get("start")
-        timestamp_iso = None
-        if isinstance(start_val, (int, float)):
-            timestamp_iso = _offset_to_iso(base_time, float(start_val))
-        else:
-            timestamp_iso = _coerce_iso_timestamp(item.get("timestamp")) or _coerce_iso_timestamp(item.get("time"))
-            if not timestamp_iso and isinstance(item.get("timestamp"), dict):
+        base_timestamp_iso = None
+        if not isinstance(start_val, (int, float)):
+            base_timestamp_iso = _coerce_iso_timestamp(item.get("timestamp")) or _coerce_iso_timestamp(item.get("time"))
+            if not base_timestamp_iso and isinstance(item.get("timestamp"), dict):
                 ts = item.get("timestamp", {})
-                timestamp_iso = _coerce_iso_timestamp(ts.get("$date")) or _coerce_iso_timestamp(ts.get("iso"))
+                base_timestamp_iso = _coerce_iso_timestamp(ts.get("$date")) or _coerce_iso_timestamp(ts.get("iso"))
 
-        if not timestamp_iso:
-            timestamp_iso = _offset_to_iso(base_time, idx * 5.0)
+        for split_idx, (speaker, turn_message) in enumerate(splits):
+            normalized_speaker = speaker if speaker in {"agent", "customer"} else default_speaker
+            if not normalized_speaker:
+                normalized_speaker = "agent" if (turn_index % 2 == 0) else "customer"
 
-        structured.append(
-            {
-                "speaker": speaker,
-                "message": message,
-                "timestamp": {"$date": timestamp_iso},
-            }
-        )
+            if isinstance(start_val, (int, float)):
+                offset = float(start_val) + split_idx * 2.5
+                timestamp_iso = _offset_to_iso(base_time, offset)
+            elif base_timestamp_iso and split_idx == 0:
+                timestamp_iso = base_timestamp_iso
+            else:
+                timestamp_iso = _offset_to_iso(base_time, turn_index * 5.0)
+
+            structured.append(
+                {
+                    "speaker": normalized_speaker,
+                    "message": turn_message,
+                    "timestamp": {"$date": timestamp_iso},
+                }
+            )
+            turn_index += 1
 
     return structured
 
@@ -272,6 +310,95 @@ def _transcript_text_items(transcript_text: str) -> List[Dict[str, Any]]:
             }
         )
     return items
+
+
+def _expand_combined_dialogue(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    expanded: List[Dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        raw_message = item.get("message")
+        if raw_message is None:
+            raw_message = item.get("text")
+        text = _stringify_insight(raw_message).strip()
+        if not text:
+            continue
+
+        splits = _split_message_into_turns(text, str(item.get("speaker", "")))
+        if splits and len(splits) > 1:
+            for speaker, message in splits:
+                expanded.append({"speaker": speaker, "message": message})
+            continue
+
+        if "\n" in text:
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            if len(lines) > 1:
+                for line in lines:
+                    expanded.append({"speaker": item.get("speaker"), "message": line})
+                continue
+
+        new_item = dict(item)
+        new_item["message"] = text
+        expanded.append(new_item)
+
+    return expanded
+
+
+def _split_message_into_turns(message: str, default_speaker: str) -> List[Tuple[str, str]]:
+    message = message.strip()
+    if not message:
+        return []
+
+    pattern = re.compile(r"\b(agent|customer)\s*[:\-]\s*", re.IGNORECASE)
+    matches = list(pattern.finditer(message))
+    if matches:
+        turns: List[Tuple[str, str]] = []
+        for idx, match in enumerate(matches):
+            speaker = match.group(1).lower()
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(message)
+            turn_text = message[start:end].strip()
+            if turn_text:
+                turns.append((speaker, turn_text))
+        if turns:
+            return turns
+
+    normalized_default = default_speaker.lower().strip()
+    if "\n" in message:
+        lines = [line.strip() for line in message.splitlines() if line.strip()]
+        if len(lines) > 1:
+            speaker = normalized_default or "agent"
+            return [(speaker, line) for line in lines]
+
+    sentences = _split_into_sentences(message)
+    if len(sentences) > 1:
+        base_speaker = normalized_default or "agent"
+        turns: List[Tuple[str, str]] = []
+        for idx, sentence in enumerate(sentences):
+            speaker = base_speaker if idx % 2 == 0 else ("customer" if base_speaker == "agent" else "agent")
+            turns.append((speaker, sentence))
+        return turns
+
+    return [((normalized_default or "agent"), message)]
+
+
+def _split_into_sentences(message: str) -> List[str]:
+    pattern = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+    chunks = [chunk.strip() for chunk in pattern.split(message) if chunk.strip()]
+    if len(chunks) <= 1:
+        return chunks
+    combined: List[str] = []
+    buffer = ""
+    for chunk in chunks:
+        if len(chunk) < 10 and buffer:
+            buffer = f"{buffer} {chunk}".strip()
+        else:
+            if buffer:
+                combined.append(buffer)
+            buffer = chunk
+    if buffer:
+        combined.append(buffer)
+    return combined
 
 
 def _generate_analysis_outputs(transcript_text: str) -> Dict[str, Any]:

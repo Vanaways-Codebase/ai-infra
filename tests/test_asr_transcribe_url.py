@@ -49,9 +49,24 @@ def test_transcribe_url_uses_ringcentral(monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/api/v1/asr/transcribe/url",
-        json={"audio_url": "https://rc.example.com/content/123"},
+        json={
+            "audio_url": "https://rc.example.com/content/123",
+            "ringCentralId": "rc-789",
+        },
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["text"] == "transcribed"
-    assert payload["status"].lower() == "completed"
+    assert payload["ringCentralId"] == "rc-789"
+    assert payload["rating"] == 0
+    assert payload["callType"] == ""
+    assert payload["mqlScore"] == 0
+    assert payload["sentimentScore"] == 0
+    assert payload["keywords"] == []
+    assert payload["transcription"] == []
+    assert payload["tags"] == []
+    assert payload["summary"] == ""
+    assert payload["callAnalysis"] is None
+    assert payload["buyerIntent"] == 0
+    assert payload["buyerIntentReason"] is None
+    assert payload["agentRecommendation"] is None
+    assert payload["contactExtraction"] is None

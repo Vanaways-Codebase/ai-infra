@@ -65,7 +65,7 @@ app.include_router(api_router, prefix=api_prefix)
 @app.get("/")
 async def root():
     return {
-        "message": "Welcome to Call Transcription Analysis API",
+        "message": "Welcome to Call Transcription Analysis API 25a",
         "docs": "/docs",
         "version": app.version,
     }
