@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     AZURE_EVENTHUB_CONSUMER_GROUP: str = os.getenv("AZURE_EVENTHUB_CONSUMER_GROUP", "$Default")
     AZURE_EVENTHUB_PREFETCH: int = int(os.getenv("AZURE_EVENTHUB_PREFETCH", "300"))
 
+    # Azure Service Bus
+    AZURE_SERVICEBUS_CONNECTION_STRING: str = os.getenv("AZURE_SERVICEBUS_CONNECTION_STRING", "")
+    AZURE_SERVICEBUS_QUEUE_NAME: str = os.getenv("AZURE_SERVICEBUS_QUEUE_NAME", "")
+    AZURE_SERVICEBUS_MAX_MESSAGE_COUNT: int = int(os.getenv("AZURE_SERVICEBUS_MAX_MESSAGE_COUNT", "5"))
+    AZURE_SERVICEBUS_MAX_WAIT_SECONDS: float = float(os.getenv("AZURE_SERVICEBUS_MAX_WAIT_SECONDS", "5"))
+
     # OpenAI Settings
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")    
     OPENAI_TRANSCRIPTION_MODEL: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")
@@ -48,6 +54,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 # Create settings instance
 settings = Settings()
