@@ -70,3 +70,35 @@ def test_transcribe_url_uses_ringcentral(monkeypatch):
     assert payload["buyerIntentReason"] is None
     assert payload["agentRecommendation"] is None
     assert payload["contactExtraction"] is None
+
+
+def test_transcribe_message_aliases(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.settings.AZURE_SERVICEBUS_CONNECTION_STRING",
+        "",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.main.settings.AZURE_SERVICEBUS_QUEUE_NAME",
+        "",
+        raising=False,
+    )
+
+    result = TranscriptionResult(status="completed", text="done")
+
+    monkeypatch.setattr(
+        "app.modules.asr.routes._transcribe_ringcentral_content",
+        lambda url: result,
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/asr/transcribe/message",
+        json={
+            "audioUrl": "https://rc.example.com/content/999",
+            "ringCentralId": "rc-123",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ringCentralId"] == "rc-123"

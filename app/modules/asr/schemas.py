@@ -13,6 +13,14 @@ class TranscribeUrlRequest(BaseModel):
     )
 
 
+class AudioProcessingMessageRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    audio_url: HttpUrl = Field(validation_alias=AliasChoices("audio_url", "audioUrl"))
+    ring_central_id: str = Field(validation_alias=AliasChoices("ring_central_id", "ringCentralId"))
+    timestamp: Optional[str] = None
+
+
 class TranscriptUtterance(BaseModel):
     speaker: Literal["agent", "customer"]
     message: str

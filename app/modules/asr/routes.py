@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 import os
 import tempfile
@@ -9,10 +10,16 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.modules.recording.service import fetch_recording_bytes
 
-from .schemas import TranscriptUtterance, TranscribeResponse, TranscribeUrlRequest
+from .schemas import (
+    AudioProcessingMessageRequest,
+    TranscriptUtterance,
+    TranscribeResponse,
+    TranscribeUrlRequest,
+)
 from .service import _status_name, transcribe_from_file_path, transcribe_from_url
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/transcribe/url", response_model=TranscribeResponse, summary="Transcribe audio from a URL")
@@ -23,16 +30,36 @@ async def transcribe_url(body: TranscribeUrlRequest) -> TranscribeResponse:
     except HTTPException:
         raise
     except Exception as primary_error:
+        logger.warning(
+            "RingCentral download failed for url=%s: %s",
+            body.audio_url,
+            primary_error,
+        )
         try:
             transcription_result = await _to_thread(transcribe_from_url, str(body.audio_url))
             return _build_transcribe_response(transcription_result, ring_central_id=body.ring_central_id)
         except HTTPException:
             raise
         except Exception as fallback_error:
+            logger.error(
+                "Fallback transcription failed for url=%s: %s",
+                body.audio_url,
+                fallback_error,
+            )
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to transcribe URL: {fallback_error or primary_error}",
             ) from fallback_error
+
+
+@router.post(
+    "/transcribe/message",
+    response_model=TranscribeResponse,
+    summary="Transcribe audio message payload (RingCentral queue format)",
+)
+async def transcribe_message(body: AudioProcessingMessageRequest) -> TranscribeResponse:
+    request = TranscribeUrlRequest(audio_url=body.audio_url, ring_central_id=body.ring_central_id)
+    return await transcribe_url(request)
 
 
 @router.post("/transcribe/file", response_model=TranscribeResponse, summary="Transcribe uploaded audio file")
@@ -66,7 +93,11 @@ async def _to_thread(func, *args, **kwargs):
 
 
 def _transcribe_ringcentral_content(audio_url: str):
-    data, content_type, filename = fetch_recording_bytes(audio_url, None)
+    try:
+        data, content_type, filename = fetch_recording_bytes(audio_url, None)
+    except Exception as exc:
+        logger.error("RingCentral fetch failed for url=%s: %s", audio_url, exc)
+        raise
     suffix = Path(filename).suffix
     if not suffix:
         suffix = mimetypes.guess_extension(content_type or "") or ".mp3"

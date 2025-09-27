@@ -1,6 +1,7 @@
 import os
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
+from typing import Optional
 
 # Load environment variables from .env file
 load_dotenv()
@@ -41,8 +42,9 @@ class Settings(BaseSettings):
     AZURE_EVENTHUB_PREFETCH: int = int(os.getenv("AZURE_EVENTHUB_PREFETCH", "300"))
 
     # Azure Service Bus
-    AZURE_SERVICEBUS_CONNECTION_STRING: str = os.getenv("AZURE_SERVICEBUS_CONNECTION_STRING", "")
-    AZURE_SERVICEBUS_QUEUE_NAME: str = os.getenv("AZURE_SERVICEBUS_QUEUE_NAME", "")
+    AZURE_SERVICEBUS_CONNECTION_STRING: Optional[str] = None
+    AZURE_SERVICEBUS_QUEUE_NAME: Optional[str] = "audio-processing-queue"
+    AZURE_SERVICEBUS_RESPONSE_QUEUE_NAME: Optional[str] = "audio-response-queue"  # Add this line
     AZURE_SERVICEBUS_MAX_MESSAGE_COUNT: int = int(os.getenv("AZURE_SERVICEBUS_MAX_MESSAGE_COUNT", "5"))
     AZURE_SERVICEBUS_MAX_WAIT_SECONDS: float = float(os.getenv("AZURE_SERVICEBUS_MAX_WAIT_SECONDS", "5"))
 

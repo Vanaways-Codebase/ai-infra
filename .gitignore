@@ -6,10 +6,15 @@ dist/
 wheels/
 *.egg-info
 
+# Cache files
+.cache
+.pytest_cache
+.ipynb_checkpoints
+
 # Virtual environments
 .venv
 *.env
 vanaways
 
 recording_media
-old
+.DS_Store
