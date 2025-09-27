@@ -44,11 +44,11 @@ def create_application() -> FastAPI:
 
 app = create_application()
 
-@app.get("", tags=["App"], summary="App Version")
+@app.get("/", tags=["App"], summary="App Version")
 async def root():
     return {
         "message": "AI Infra is running!",
-        "version": "27a",
+        "version": "27b",
     }
 
 @app.get("/health")

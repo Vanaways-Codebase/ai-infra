@@ -35,16 +35,8 @@ class Settings(BaseSettings):
     RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
     RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
 
-    # Azure Event Hubs
-    AZURE_EVENTHUB_CONNECTION_STRING: str = os.getenv("AZURE_EVENTHUB_CONNECTION_STRING", "")
-    AZURE_EVENTHUB_NAME: str = os.getenv("AZURE_EVENTHUB_NAME", "")
-    AZURE_EVENTHUB_CONSUMER_GROUP: str = os.getenv("AZURE_EVENTHUB_CONSUMER_GROUP", "$Default")
-    AZURE_EVENTHUB_PREFETCH: int = int(os.getenv("AZURE_EVENTHUB_PREFETCH", "300"))
-
     # Azure Service Bus
     AZURE_SERVICEBUS_CONNECTION_STRING: Optional[str] = None
-    AZURE_SERVICEBUS_QUEUE_NAME: Optional[str] = "audio-processing-queue"
-    AZURE_SERVICEBUS_RESPONSE_QUEUE_NAME: Optional[str] = "audio-response-queue"  # Add this line
     AZURE_SERVICEBUS_MAX_MESSAGE_COUNT: int = int(os.getenv("AZURE_SERVICEBUS_MAX_MESSAGE_COUNT", "5"))
     AZURE_SERVICEBUS_MAX_WAIT_SECONDS: float = float(os.getenv("AZURE_SERVICEBUS_MAX_WAIT_SECONDS", "5"))
 
