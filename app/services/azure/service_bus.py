@@ -294,7 +294,7 @@ class ServiceBusManager:
             with sender:
                 service_bus_message = ServiceBusMessage(message)
                 sender.send_messages(service_bus_message)
-                print(f"Sent to {queue_name}") #{message.decode('utf-8')}
+                print(f"Sent to {queue_name} {message.decode('utf-8')}\n") 
                 
         except Exception as e:
             print(f"Error sending message to {queue_name}: {e}")
