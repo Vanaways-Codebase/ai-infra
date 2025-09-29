@@ -1,6 +1,7 @@
 import requests
 import os
 import base64
+from typing import Tuple, Optional
 def get_ringcentral_access_token(client_id:str,client_secret: str,jwt_token:str ) -> str:
     """
     Retrieves a RingCentral access token using JWT authentication.
@@ -46,3 +47,33 @@ def get_ringcentral_access_token(client_id:str,client_secret: str,jwt_token:str 
 # client_id = os.getenv("RINGCENTRAL_CLIENT_ID")
 # jwt = os.getenv("RINGCENTRAL_JWT")
 # access_token = get_ringcentral_access_token(client_id, jwt)
+
+
+def get_ringcentral_access_token_with_meta(
+    client_id: str,
+    client_secret: str,
+    jwt_token: str,
+) -> Tuple[str, Optional[int]]:
+    """
+    Retrieves a RingCentral access token and returns (access_token, expires_in_seconds).
+    Falls back to returning (token, None) if the field is absent.
+    """
+    credentials = f"{client_id}:{client_secret}"
+    auth_header = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': f'Basic {auth_header}'
+    }
+    data = {
+        'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        'assertion': jwt_token
+    }
+    response = requests.post(
+        'https://platform.ringcentral.com/restapi/oauth/token',
+        headers=headers,
+        data=data
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload.get('access_token'), payload.get('expires_in')

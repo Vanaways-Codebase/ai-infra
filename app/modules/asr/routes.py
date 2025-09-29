@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.modules.recording.service import fetch_recording_bytes
+import math
+from app.modules.recording.service import fetch_recording_bytes, RingCentralRateLimitActive
 
 from .schemas import (
     AudioProcessingMessageRequest,
@@ -27,6 +28,9 @@ async def transcribe_url(body: TranscribeUrlRequest) -> TranscribeResponse:
     try:
         transcription_result = await _to_thread(_transcribe_ringcentral_content, str(body.audio_url))
         return _build_transcribe_response(transcription_result, ring_central_id=body.ring_central_id)
+    except RingCentralRateLimitActive as rle:
+        retry_after = max(1, int(math.ceil(getattr(rle, "retry_after", 30.0))))
+        raise HTTPException(status_code=429, detail="RingCentral rate limit active", headers={"Retry-After": str(retry_after)})
     except HTTPException:
         raise
     except Exception as primary_error:

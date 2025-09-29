@@ -206,6 +206,17 @@ class ServiceBusManager:
                 receiver.complete_message(msg)
                 
             except Exception as primary_error:
+                # If rate limited, do not attempt fallback; just log and complete
+                try:
+                    from app.modules.recording.service import RingCentralRateLimitActive  # local import to avoid cycles
+                    if isinstance(primary_error, RingCentralRateLimitActive):
+                        retry_after = getattr(primary_error, 'retry_after', 30)
+                        print(f"RingCentral rate limit active for url={audio_url}. Retry after {retry_after:.0f}s. Skipping fallback.")
+                        receiver.complete_message(msg)
+                        return
+                except Exception:
+                    pass
+
                 print(f"RingCentral download failed for url={audio_url}: {primary_error}")
                 
                 try:

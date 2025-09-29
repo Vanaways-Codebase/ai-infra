@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     RINGCENTRAL_CLIENT_ID: str = os.getenv("RINGCENTRAL_CLIENT_ID", "")
     RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
     RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
+    RINGCENTRAL_STRICT_RATE_LIMIT: bool = os.getenv("RINGCENTRAL_STRICT_RATE_LIMIT", "true").lower() in {"1", "true", "yes"}
 
     # Azure Service Bus
     AZURE_SERVICEBUS_CONNECTION_STRING: Optional[str] = None

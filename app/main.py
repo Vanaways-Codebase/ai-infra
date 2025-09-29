@@ -48,7 +48,7 @@ app = create_application()
 async def root():
     return {
         "message": "AI Infra is running!",
-        "version": "29a",
+        "version": "29b",
     }
 
 @app.get("/health")
