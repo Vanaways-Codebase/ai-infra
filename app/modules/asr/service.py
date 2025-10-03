@@ -1,473 +1,382 @@
+import asyncio
 import json
 import logging
 import mimetypes
 import os
-import re
-import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import requests
 from app.core.config import settings
-from app.core.openai_client import get_openai_client
+from app.core.database.mongodb import db
+from app.core.openai_client import (
+    get_azure_openai_client,
+    get_azure_openai_eastus_client,
+    get_openai_client,
+)
+from app.ringcentral.service import download_audio, get_recording_audio_url
 
+from .schemas import TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
+async def manual_transcribe(limit: int = 1) -> List[Dict[str, Any]]:
+    """Manually transcribe the most recent calls in MongoDB."""
 
-STRUCTURED_TRANSCRIPT_MODEL = "gpt-4.1-2025-04-14"
-# Prefer a higher-context model when the base request overflows the token window
-STRUCTURED_TRANSCRIPT_FALLBACK_MODEL = "gpt-4.1"
+    if limit <= 0:
+        raise ValueError("limit must be a positive integer")
+
+    disconnect_after = False
+    try:
+        if db.database is None:
+            await db.connect()
+            disconnect_after = True
+        calls_collection = db.get_collection("calls")
+    except Exception as exc:
+        logger.error("Unable to access MongoDB: %s", exc)
+        raise
+
+    cursor = (
+        calls_collection
+        .find({"ringCentralId": {"$exists": True, "$ne": None}})
+        .sort([("createdAt", -1), ("_id", -1)])
+        .limit(limit)
+    )
+
+    calls = await cursor.to_list(length=limit)
+
+    print(f"\nFound {len(calls)} calls to process")
+
+    processed: List[Dict[str, Any]] = []
+
+    for call_data in calls:
+        call_id = call_data.get("_id")
+        ring_central_id = (
+            call_data.get("ringCentralId")
+            or call_data.get("ring_central_id")
+            or call_data.get("recordingId")
+        )
+
+        if not ring_central_id:
+            logger.warning("Skipping call %s without ringCentralId", call_id)
+            continue
+
+        try:
+            audio_url = await get_recording_audio_url(str(ring_central_id))
+            transcription = await transcribe(url=audio_url)
+            transcription_payload = transcription.model_dump()
+
+            update_doc: Dict[str, Any] = {
+                "callAnalysis": transcription.call_analysis,
+                "transcriptionResult": transcription_payload,
+                "transcriptionUpdatedAt": datetime.now(timezone.utc),
+            }
+
+            await calls_collection.update_one(
+                {"_id": call_id},
+                {"$set": update_doc}
+            )
+
+            processed.append(
+                {
+                    "call_id": str(call_id) if call_id is not None else None,
+                    "ring_central_id": ring_central_id,
+                    "status": transcription.status,
+                }
+            )
+        except Exception as exc:
+            logger.exception(
+                "Manual transcription failed for ringCentralId=%s", ring_central_id
+            )
+
+    if disconnect_after:
+        await db.disconnect()
+
+    return processed
+    
+
+async def transcribe(recording_id: Optional[str] = None, url: Optional[str] = None) -> TranscriptionResult:
+    """
+    Transcribe audio using OpenAI's Whisper model.
+
+    Args:
+        recording_id: Optional RingCentral recording ID
+        url: Optional direct URL to audio file
+
+    Returns:
+        TranscriptionResult containing the transcription and related metadata
+
+    Raises:
+        ValueError: If neither recording_id nor url is provided
+    """
+    if not recording_id and not url:
+        raise ValueError("Either recording_id or url must be provided")
+
+    # Create a temporary file path for the download
+    temp_dir = Path(os.environ.get("TEMP_DIR", "/tmp"))
+    temp_dir.mkdir(exist_ok=True)
+    temp_file = temp_dir / \
+        f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+
+    try:
+        # Download the audio file
+        downloaded_file = await download_audio(
+            output_path=str(temp_file),
+            recording_id=recording_id,
+            url=url
+        )
+
+        # Transcribe the audio file
+        result = await _transcribe_file(downloaded_file)
+        return result
+
+    finally:
+        # Clean up the temporary file
+        if temp_file.exists():
+            try:
+                os.remove(temp_file)
+            except OSError as e:
+                logger.warning(
+                    f"Failed to remove temporary file {temp_file}: {e}")
 
 
-@dataclass
-class TranscriptionResult:
-    status: str
-    text: str
-    confidence: Optional[float] = None
-    id: Optional[str] = None
-    call_summary: Optional[str] = None
-    call_analysis: Optional[str] = None
-    buyer_intent: Optional[str] = None
-    buyer_intent_score: Optional[float] = None
-    buyer_intent_reason: Optional[str] = None
-    agent_recommendation: Optional[str] = None
-    structured_transcript: Optional[List[Dict[str, Any]]] = None
-    keywords: Optional[List[str]] = None
-    mql_assessment: Optional[float] = None
-    sentiment_analysis: Optional[float] = None
-    customer_rating: Optional[float] = None
-    call_type: Optional[str] = None
-    summary: Optional[str] = None
-    vehicle_tags: Optional[Dict[str, str]] = None
-    contact_extraction: Optional[Dict[str, str]] = None
+async def _transcribe_file(file_path: Path) -> TranscriptionResult:
+    """
+    Transcribe an audio file using OpenAI's Whisper model.
 
+    Args:
+        file_path: Path to the audio file
 
-def _determine_suffix(content_type: Optional[str], fallback: str = ".mp3") -> str:
-    if content_type:
-        suffix = mimetypes.guess_extension(content_type.split(";")[0].strip())
-        if suffix:
-            return suffix
-    return fallback
-
-
-def _download_audio_to_tempfile(audio_url: str) -> str:
-    response = requests.get(audio_url, stream=True, timeout=60)
-    response.raise_for_status()
-    suffix = _determine_suffix(response.headers.get("content-type"))
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                tmp_file.write(chunk)
-        return tmp_file.name
-
-
-def _transcribe_from_path(path: str) -> TranscriptionResult:
+    Returns:
+        TranscriptionResult object
+    """
     client = get_openai_client()
     model = (settings.OPENAI_TRANSCRIPTION_MODEL or "").strip() or "whisper-1"
-    with open(path, "rb") as file_stream:
-        transcript = client.audio.transcriptions.create(
-            model=model,
-            file=file_stream,
-        )
+
+    # Use asyncio.to_thread for non-async operations
+    def _transcribe():
+        with open(file_path, "rb") as file_stream:
+            return client.audio.transcriptions.create(
+                model=model,
+                file=file_stream,
+                response_format="verbose_json",
+                timestamp_granularities=["word", "segment"],
+                prompt="This is a sales call recording between a customer and a sales agent of Vanaways. Please identify and separate the speakers accurately. The conversation involves a customer inquiry and agent responses about products or services. Ensure proper speaker diarization to distinguish between customer and agent throughout the call. Also identify and mark any voicemail messages and hold ringtones/music that may occur during the call."
+            )
+
+    transcript = await asyncio.to_thread(_transcribe)
+
+    # print("\n\nTRANSCRIPT", transcript)  # Debug output of the full transcript
+
+    # Extract text and segments from transcript
     text = getattr(transcript, "text", "") or ""
     segments = _extract_segments(transcript)
-    insights = _generate_call_insights(text)
-    structured_transcript = _generate_structured_transcript(text, segments)
-    analysis_suite = _generate_analysis_outputs(text)
-    summary = _stringify_insight(insights.get("summary"))
-    analysis = _stringify_insight(insights.get("analysis"))
-    buyer_intent_reason = _stringify_insight(insights.get("buyer_intent_reason"))
-    buyer_intent_score = _coerce_float(insights.get("buyer_intent_score"))
-    agent_reco = _stringify_insight(insights.get("agent_recommendation"))
+
+    # Create structured transcript from segments
+    structured_transcript = await _generate_structured_transcript(text, segments)
+
+    # Now analyze the transcript for additional information
+    analysis = await _analyze_transcript(text, structured_transcript)
+
+    # Get transcription ID
+    transcript_id = getattr(transcript, "id", None)
+    if not transcript_id:
+        transcript_id = f"transcription_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(text) % 10000}"
+
+    # Prepare vehicle tags from regular tags - convert list to dict format expected by schema
+    vehicle_tags_dict = {}
+    for i, tag in enumerate(analysis.get("tags", [])):
+        if tag and isinstance(tag, str):
+            vehicle_tags_dict[f"tag_{i+1}"] = tag
+            
+    # Get contact info from analysis and create a ContactExtraction object
+    contacts_dict = analysis.get("contacts", {})
+    from .schemas import ContactExtraction
+    
+    # Create ContactExtraction object from dictionary
+    contact_extraction = ContactExtraction(
+        name=contacts_dict.get("name"),
+        email=contacts_dict.get("email"),
+        phone=contacts_dict.get("phone"),
+        company=contacts_dict.get("company"),
+        address=contacts_dict.get("address"),
+        city=contacts_dict.get("city")
+    )
+
     return TranscriptionResult(
         status="completed",
         text=text,
-        confidence=None,
-        id=getattr(transcript, "id", None),
-        call_summary=summary,
-        call_analysis=analysis,
-        buyer_intent=buyer_intent_reason,
-        buyer_intent_score=buyer_intent_score,
-        buyer_intent_reason=buyer_intent_reason,
-        agent_recommendation=agent_reco,
+        confidence=None,  # Whisper does not provide overall confidence
+        id=transcript_id,
+        call_summary=analysis.get("summary"),
+        call_analysis=analysis.get("analysis"),
+        buyer_intent=analysis.get("buyer_intent_reason"),
+        buyer_intent_score=analysis.get("buyer_intent_score"),
+        buyer_intent_reason=analysis.get("buyer_intent_reason"),
+        agent_recommendation=analysis.get("agent_recommendation"),
         structured_transcript=structured_transcript,
-        keywords=analysis_suite.get("keywords"),
-        mql_assessment=analysis_suite.get("mql_assessment"),
-        sentiment_analysis=analysis_suite.get("sentiment_analysis"),
-        customer_rating=analysis_suite.get("customer_rating"),
-        call_type=analysis_suite.get("call_type"),
-        summary=analysis_suite.get("summary"),
-        vehicle_tags=analysis_suite.get("vehicle_tags"),
-        contact_extraction=analysis_suite.get("contact_extraction"),
+        keywords=analysis.get("keywords", []),
+        mql_assessment=analysis.get("mql_score", 0.0),
+        sentiment_analysis=analysis.get("sentiment", 0.0),
+        customer_rating=analysis.get("rating", 0.0),
+        call_type=analysis.get("call_type", ""),
+        summary=analysis.get("summary", ""),
+        vehicle_tags=vehicle_tags_dict,
+        contact_extraction=contact_extraction,  # Use the ContactExtraction model
     )
 
 
-def _generate_call_insights(transcript_text: str) -> dict:
-    if not transcript_text.strip():
-        return {
-            "summary": "",
-            "analysis": "",
-            "buyer_intent_score": 0,
-            "buyer_intent_reason": "",
-            "agent_recommendation": "",
-        }
+async def _analyze_transcript(text: str, structured_transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Analyze transcript to extract keywords, generate summaries, and other insights.
 
-    model = (settings.OPENAI_INSIGHTS_MODEL or "").strip() or "gpt-4o-mini"
-    # Keep prompt concise to control latency and cost while ensuring structured output
-    prompt = (
-        "You are an expert sales analyst. Given the transcript, decide whether the customer expresses interest "
-        "in purchasing or continuing a service. Return JSON with keys: summary (string, 3-5 bullet sentences), "
-        "analysis (string highlighting tone, objections, pivotal moments), buyer_intent_score (integer 1-10), "
-        "buyer_intent_reason (string explaining the score and explicitly mention if a sale or renewal occurs), "
-        "agent_recommendation (string with next best actions). When the call contains a confirmed purchase, "
-        "renewal, or strong buying signals, the score must be 8-10. If the caller declines, requests support only, "
-        "or shows no interest, the score must be 1-3. Use 4-7 for uncertain or mixed interest."
-    )
+    Args:
+        text: Full transcript text
+        structured_transcript: Structured transcript with speaker turns
 
-    raw_text = _call_openai_json(
-        model=model,
-        system_prompt=prompt,
-        user_content=transcript_text[:8000],
-        enforce_json_object=True,
-    )
+    Returns:
+        Dictionary with analysis results
+    """
+    if not text.strip():
+        return {}
 
-    if not raw_text:
-        return {"summary": "", "analysis": "", "buyer_intent": "", "agent_recommendation": ""}
+    # Initialize with default values
+    call_analysis_schema = {
+                "type": "object",
+                "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 0
+                    },
+                    "summary": {
+                        "type": ["string", "null"]
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 0
+                    },
+                    "sentiment": {
+                        "type": ["number", "null"]
+                    },
+                    "mql_score": {
+                        "type": ["number", "null"]
+                    },
+                    "rating": {
+                        "type": ["number", "null"]
+                    },
+                    "call_type": {
+                        "type": ["string", "null"]
+                    },
+                    "buyer_intent_score": {
+                        "type": ["number", "null"]
+                    },
+                    "buyer_intent_reason": {
+                        "type": ["string", "null"]
+                    },
+                    "agent_recommendation": {
+                        "type": ["string", "null"]
+                    },
+                    "analysis": {
+                        "type": ["string", "null"]
+                    },
+                    "contacts": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": ["string", "null"]
+                            },
+                            "email": {
+                                "type": ["string", "null"],
+                                "format": "email"
+                            },
+                            "phone": {
+                                "type": ["string", "null"]
+                            },
+                            "company": {
+                                "type": ["string", "null"]
+                            },
+                            "address": {
+                                "type": ["string", "null"]
+                            },
+                            "city": {
+                                "type": ["string", "null"]
+                            }
+                        },
+                        "required": ["name", "email", "phone", "company", "address", "city"],
+                        "additionalProperties": False
+                    }
+                },
+                "required": ["keywords", "summary", "tags", "sentiment", "mql_score", "rating", "call_type", "buyer_intent_score", "buyer_intent_reason", "agent_recommendation", "analysis", "contacts"],
+                "additionalProperties": False
+            }
 
+    # Use OpenAI to analyze the transcript
     try:
-        data = json.loads(raw_text)
-        if isinstance(data, dict):
-            if "buyer_intent_score" in data:
-                try:
-                    data["buyer_intent_score"] = int(data["buyer_intent_score"])
-                except (TypeError, ValueError):
-                    data["buyer_intent_score"] = 0
-            return data
-    except json.JSONDecodeError:
-        return {
-            "summary": raw_text,
-            "analysis": "",
-            "buyer_intent_score": 0,
-            "buyer_intent_reason": "",
-            "agent_recommendation": "",
-        }
+        client = get_openai_client()
 
+        # Build prompt with structured format
+        conversation = "\n".join([
+            f"{turn['speaker'].upper()}: {turn['message']}"
+            for turn in structured_transcript
+        ])
 
-def _generate_structured_transcript(transcript_text: str, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not transcript_text.strip():
-        return []
+        prompt = f"""Analyze this Vanaways sales call transcript and extract the required information.
 
-    system_prompt = (
-        "You transform call transcripts into structured JSON. Return a JSON array where each element has the "
-        "keys speaker, message, start, end. Speaker must be either agent or customer. If unsure, infer from "
-        "context but keep the best guess. Start and end should be the segment start/end in seconds if provided; "
-        "otherwise estimate monotonically increasing floats. Message should contain the cleaned utterance text."
-    )
+        Transcript:
+        {conversation}
 
-    primary_payload = {
-        "segments": segments[:120] if segments else [],
-        "transcript": transcript_text[:12000],
-        "instructions": "Label each utterance as agent or customer and preserve chronological order, and if call gets hold or music or anything else, note that as well.",
-    }
+        Focus on identifying:
+        - keywords: Extract the most important keywords and phrases from this van-related conversation. Focus on vehicle types, models, makes, leasing/sales terms, business needs, and action items.
+        - mql_assessment: Score this van-related conversation as a Marketing Qualified Lead (MQL) from 0 to 10. Consider: interest level, budget signals, authority to decide, urgency, and product fit. Return only the number.
+        - sentiment_analysis: Rate the overall sentiment of this van-related customer conversation from 0 (very negative) to 10 (very positive). Consider satisfaction, tone, agent helpfulness, issue resolution, and engagement. Return only the number.
+        - customer_rating: Based on this van-related conversation, rate how satisfied the customer seems. Scale: 0 = very unhappy, 5-6 = neutral, 9-10 = very happy. Return only the number.
+        - call_type: Classify this van-related conversation into one of: \"High Score\", \"Hot Lead\", \"Customer Issue\", \"General Inquiry\", \"Follow Up\", \"Other\". Return only the category name.
+        - summary: Provide a concise summary of this van-related conversation.
+        - vehicle_tags as Tags: Extract all vehicle-related terms from this conversation (makes, models, types). Count frequency of each term.
+        - Purchase intent signals and next steps
+        - Any customer contact details shared
+        
+        Provide a complete analysis with insights that would help Vanaways improve their sales process."""
 
-    raw_text, error = _call_openai_json_with_error(
-        model=STRUCTURED_TRANSCRIPT_MODEL,
-        system_prompt=system_prompt,
-        user_content=json.dumps(primary_payload, ensure_ascii=False),
-        enforce_json_object=False,
-    )
-
-    if not raw_text and _is_context_length_error(error):
-        logger.info("Structured transcript request exceeded base context; retrying with fallback model.")
-        fallback_payload = {
-            "segments": segments,
-            "transcript": transcript_text,
-            "instructions": primary_payload["instructions"],
-        }
-        raw_text, error = _call_openai_json_with_error(
-            model=STRUCTURED_TRANSCRIPT_FALLBACK_MODEL,
-            system_prompt=system_prompt,
-            user_content=json.dumps(fallback_payload, ensure_ascii=False),
-            enforce_json_object=False,
-        )
-
-    parsed_items: List[Dict[str, Any]] = []
-    if raw_text:
-        try:
-            parsed = json.loads(raw_text)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            if "utterances" in parsed and isinstance(parsed["utterances"], list):
-                parsed = parsed["utterances"]
-            else:
-                parsed = [value for value in parsed.values() if isinstance(value, dict)]
-        if isinstance(parsed, list):
-            parsed_items = [item for item in parsed if isinstance(item, dict)]
-
-    parsed_items = _expand_combined_dialogue(parsed_items)
-
-    structured = _build_structured_entries(parsed_items)
-    if structured:
-        return structured
-
-    structured_from_segments = _build_structured_entries(_segment_items(segments))
-    if structured_from_segments:
-        return structured_from_segments
-
-    return _build_structured_entries(_transcript_text_items(transcript_text))
-
-
-def _build_structured_entries(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    base_time = datetime.now(timezone.utc)
-    structured: List[Dict[str, Any]] = []
-    turn_index = 0
-    for idx, item in enumerate(items):
-        if not isinstance(item, dict):
-            continue
-        raw_message = item.get("message")
-        if raw_message is None:
-            raw_message = item.get("text")
-        message = _stringify_insight(raw_message).strip()
-        if not message:
-            continue
-
-        default_speaker = str(item.get("speaker", "")).strip().lower()
-        if default_speaker not in {"agent", "customer"}:
-            default_speaker = "agent" if (turn_index % 2 == 0) else "customer"
-
-        splits = _split_message_into_turns(message, default_speaker)
-        if not splits:
-            splits = [(default_speaker, message)]
-
-        start_val = item.get("start")
-        base_timestamp_iso = None
-        if not isinstance(start_val, (int, float)):
-            base_timestamp_iso = _coerce_iso_timestamp(item.get("timestamp")) or _coerce_iso_timestamp(item.get("time"))
-            if not base_timestamp_iso and isinstance(item.get("timestamp"), dict):
-                ts = item.get("timestamp", {})
-                base_timestamp_iso = _coerce_iso_timestamp(ts.get("$date")) or _coerce_iso_timestamp(ts.get("iso"))
-
-        for split_idx, (speaker, turn_message) in enumerate(splits):
-            normalized_speaker = speaker if speaker in {"agent", "customer"} else default_speaker
-            if not normalized_speaker:
-                normalized_speaker = "agent" if (turn_index % 2 == 0) else "customer"
-
-            if isinstance(start_val, (int, float)):
-                offset = float(start_val) + split_idx * 2.5
-                timestamp_iso = _offset_to_iso(base_time, offset)
-            elif base_timestamp_iso and split_idx == 0:
-                timestamp_iso = base_timestamp_iso
-            else:
-                timestamp_iso = _offset_to_iso(base_time, turn_index * 5.0)
-
-            structured.append(
-                {
-                    "speaker": normalized_speaker,
-                    "message": turn_message,
-                    "timestamp": {"$date": timestamp_iso},
+        # Generate analysis using GPT with structured output
+        completion = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "call_analysis",
+                        "schema": call_analysis_schema,
+                        "strict": True
+                    }
                 }
             )
-            turn_index += 1
-
-    return structured
-
-
-def _segment_items(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    for segment in segments or []:
-        if not isinstance(segment, dict):
-            continue
-        message = _stringify_insight(segment.get("text")).strip()
-        if not message:
-            continue
-        item: Dict[str, Any] = {
-            "message": message,
-            "start": segment.get("start"),
-        }
-        if "speaker" in segment:
-            item["speaker"] = segment.get("speaker")
-        items.append(item)
-    return items
-
-
-def _transcript_text_items(transcript_text: str) -> List[Dict[str, Any]]:
-    cleaned = transcript_text.strip()
-    if not cleaned:
-        return []
-    lines = [line.strip() for line in cleaned.replace("\r\n", "\n").split("\n") if line.strip()]
-    if not lines:
-        lines = [cleaned]
-    items: List[Dict[str, Any]] = []
-    for idx, line in enumerate(lines):
-        items.append(
-            {
-                "speaker": "agent" if idx % 2 == 0 else "customer",
-                "message": line,
-                "start": float(idx * 5),
-            }
         )
-    return items
 
+        # Parse response
+        content = completion.choices[0].message.content
+        result = json.loads(content)
 
-def _expand_combined_dialogue(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    expanded: List[Dict[str, Any]] = []
-    for item in items or []:
-        if not isinstance(item, dict):
-            continue
-        raw_message = item.get("message")
-        if raw_message is None:
-            raw_message = item.get("text")
-        text = _stringify_insight(raw_message).strip()
-        if not text:
-            continue
+        # Debug output of the parsed result
+        print("\n\nANALYSIS RESULT", result)
 
-        splits = _split_message_into_turns(text, str(item.get("speaker", "")))
-        if splits and len(splits) > 1:
-            for speaker, message in splits:
-                expanded.append({"speaker": speaker, "message": message})
-            continue
-
-        if "\n" in text:
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
-            if len(lines) > 1:
-                for line in lines:
-                    expanded.append({"speaker": item.get("speaker"), "message": line})
-                continue
-
-        new_item = dict(item)
-        new_item["message"] = text
-        expanded.append(new_item)
-
-    return expanded
-
-
-def _split_message_into_turns(message: str, default_speaker: str) -> List[Tuple[str, str]]:
-    message = message.strip()
-    if not message:
-        return []
-
-    pattern = re.compile(r"\b(agent|customer)\s*[:\-]\s*", re.IGNORECASE)
-    matches = list(pattern.finditer(message))
-    if matches:
-        turns: List[Tuple[str, str]] = []
-        for idx, match in enumerate(matches):
-            speaker = match.group(1).lower()
-            start = match.end()
-            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(message)
-            turn_text = message[start:end].strip()
-            if turn_text:
-                turns.append((speaker, turn_text))
-        if turns:
-            return turns
-
-    normalized_default = default_speaker.lower().strip()
-    if "\n" in message:
-        lines = [line.strip() for line in message.splitlines() if line.strip()]
-        if len(lines) > 1:
-            speaker = normalized_default or "agent"
-            return [(speaker, line) for line in lines]
-
-    sentences = _split_into_sentences(message)
-    if len(sentences) > 1:
-        base_speaker = normalized_default or "agent"
-        turns: List[Tuple[str, str]] = []
-        for idx, sentence in enumerate(sentences):
-            speaker = base_speaker if idx % 2 == 0 else ("customer" if base_speaker == "agent" else "agent")
-            turns.append((speaker, sentence))
-        return turns
-
-    return [((normalized_default or "agent"), message)]
-
-
-def _split_into_sentences(message: str) -> List[str]:
-    pattern = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
-    chunks = [chunk.strip() for chunk in pattern.split(message) if chunk.strip()]
-    if len(chunks) <= 1:
-        return chunks
-    combined: List[str] = []
-    buffer = ""
-    for chunk in chunks:
-        if len(chunk) < 10 and buffer:
-            buffer = f"{buffer} {chunk}".strip()
-        else:
-            if buffer:
-                combined.append(buffer)
-            buffer = chunk
-    if buffer:
-        combined.append(buffer)
-    return combined
-
-
-def _generate_analysis_outputs(transcript_text: str) -> Dict[str, Any]:
-    defaults: Dict[str, Any] = {
-        "keywords": [],
-        "mql_assessment": None,
-        "sentiment_analysis": None,
-        "customer_rating": None,
-        "call_type": None,
-        "summary": "",
-        "vehicle_tags": {},
-        "contact_extraction": {"name": "", "email": ""},
-    }
-
-    if not transcript_text.strip():
-        return defaults
-
-    model = (settings.OPENAI_INSIGHTS_MODEL or "").strip() or "gpt-4o-mini"
-    spec = (
-        "Return a JSON object with the following keys and formats: "
-        "keywords -> array of distinct strings; "
-        "mql_assessment -> number 1-10; "
-        "sentiment_analysis -> number 1-10; "
-        "customer_rating -> number 1-10; "
-        "call_type -> one of ['High Score','Hot Lead','Customer Issue','General Inquiry','Follow Up','Other']; "
-        "short_summary -> string <= 100 characters; "
-        "vehicle_tags -> object mapping lowercase vehicle terms to their frequency counts as strings; "
-        "contact_extraction -> object with keys name and email (empty string if missing)."
-    )
-    system_prompt = (
-        "You analyze van-related sales calls." +
-        " " + spec +
-        " Strictly follow the requested format for each field."
-    )
-    user_prompt = (
-        "Transcript:\n" + transcript_text[:12000] +
-        "\n\nEnsure outputs respect the specified formats and keep arrays deduplicated."
-    )
-
-    raw_text = _call_openai_json(
-        model=model,
-        system_prompt=system_prompt,
-        user_content=user_prompt,
-        enforce_json_object=True,
-    )
-
-    if not raw_text:
-        return defaults
-
-    try:
-        parsed = json.loads(raw_text)
-    except json.JSONDecodeError:
-        return defaults
-
-    return {
-        "keywords": _coerce_str_list(parsed.get("keywords")),
-        "mql_assessment": _coerce_float(parsed.get("mql_assessment")),
-        "sentiment_analysis": _coerce_float(parsed.get("sentiment_analysis")),
-        "customer_rating": _coerce_float(parsed.get("customer_rating")),
-        "call_type": _coerce_string(parsed.get("call_type")),
-        "summary": _coerce_string(parsed.get("summary")),
-        "vehicle_tags": _coerce_tag_map(parsed.get("vehicle_tags")),
-        "contact_extraction": _coerce_contact(parsed.get("contact_extraction")),
-    }
-
+        return result
+    except Exception as e:
+        logger.error(f"Error analyzing transcript: {str(e)}")
 
 def _extract_segments(transcript: Any) -> List[Dict[str, Any]]:
+    """Extract segments from the transcript object."""
     raw_segments = getattr(transcript, "segments", None)
     segments: List[Dict[str, Any]] = []
+
     if isinstance(raw_segments, list):
         for seg in raw_segments:
             if isinstance(seg, dict):
@@ -481,230 +390,76 @@ def _extract_segments(transcript: Any) -> List[Dict[str, Any]]:
 
             if text is None:
                 continue
+
             segment_entry: Dict[str, Any] = {"text": str(text)}
             if isinstance(start, (int, float)):
                 segment_entry["start"] = float(start)
             if isinstance(end, (int, float)):
                 segment_entry["end"] = float(end)
             segments.append(segment_entry)
+
     return segments
 
 
-def _coerce_str_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str) and value.strip():
-        # Attempt to parse JSON array
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, list):
-                return _coerce_str_list(parsed)
-        except json.JSONDecodeError:
-            pass
-        return [value.strip()]
-    return []
+async def _generate_structured_transcript(text: str, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Generate a structured transcript from text and segments.
 
+    Args:
+        text: The raw transcript text
+        segments: List of segment dictionaries with text, start, and end
 
-def _coerce_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return float(value.strip())
-        except ValueError:
-            return None
-    return None
+    Returns:
+        List of structured transcript entries
+    """
+    if not text.strip():
+        return []
 
+    structured: List[Dict[str, Any]] = []
 
-def _coerce_string(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        cleaned = value.strip()
-        return cleaned or None
-    cleaned = str(value).strip()
-    return cleaned or None
+    # Create structured transcript from segments
+    current_speaker = "agent"  # Start with agent as default
 
+    for idx, segment in enumerate(segments):
+        # More sophisticated speaker detection using text content
+        text_content = segment.get("text", "").strip().lower()
 
-def _coerce_tag_map(value: Any) -> Dict[str, str]:
-    result: Dict[str, str] = {}
-    if isinstance(value, dict):
-        for key, val in value.items():
-            k = str(key).strip().lower()
-            if not k:
-                continue
-            if isinstance(val, (int, float)):
-                result[k] = str(int(val)) if float(val).is_integer() else str(val)
-            else:
-                result[k] = str(val).strip()
-    elif isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, dict):
-                return _coerce_tag_map(parsed)
-        except json.JSONDecodeError:
-            pass
-    return result
+        # Check for speaker indicators in text
+        is_agent = any(x in text_content for x in [
+                       "hi, this is", "speaking", "how can i help", "vanaways", "i'm from"])
+        is_customer = any(x in text_content for x in [
+                          "i'm looking", "i want", "i need", "call about", "interested in"])
 
+        # Only change speaker if there's a strong indicator
+        if is_agent:
+            current_speaker = "agent"
+        elif is_customer:
+            current_speaker = "customer"
+        elif idx > 0 and len(structured) > 0:
+            # Alternate speakers for normal conversation flow if no clear indicators
+            prev_speaker = structured[-1]["speaker"]
+            current_speaker = "customer" if prev_speaker == "agent" else "agent"
 
-def _coerce_contact(value: Any) -> Dict[str, str]:
-    name = ""
-    email = ""
-    if isinstance(value, dict):
-        name = _coerce_string(value.get("name")) or ""
-        email = _coerce_string(value.get("email")) or ""
-    elif isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, dict):
-                return _coerce_contact(parsed)
-        except json.JSONDecodeError:
-            pass
-    return {"name": name, "email": email}
-
-
-def _offset_to_iso(base_time: datetime, offset_seconds: float) -> str:
-    timestamp = base_time + timedelta(seconds=max(offset_seconds, 0.0))
-    return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _coerce_iso_timestamp(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-    return None
-
-
-def _call_openai_json_with_error(
-    *,
-    model: str,
-    system_prompt: str,
-    user_content: str,
-    enforce_json_object: bool,
-    temperature: float = 0.3,
-) -> Tuple[str, Optional[BaseException]]:
-    client = get_openai_client()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
-
-    last_error: Optional[BaseException] = None
-    try:
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "input": messages,
-            "temperature": temperature,
+        # Format timestamp as string dictionary for compatibility with TranscriptUtterance schema
+        start_time = segment.get("start")
+        end_time = segment.get("end")
+        timestamp = {
+            "start": str(start_time) if start_time is not None else "0",
+            "end": str(end_time) if end_time is not None else ""
         }
-        if enforce_json_object:
-            kwargs["response_format"] = {"type": "json_object"}
-        response = client.responses.create(**kwargs)
-        text = _extract_output_text(response)
-        if text:
-            return text, None
-    except TypeError as exc:
-        logger.debug("Responses.create type error: %s", exc)
-        last_error = exc
-    except Exception as exc:
-        logger.warning("Responses API failed (%s). Falling back to chat completions.", exc)
-        last_error = exc
 
-    try:
-        chat_response = client.chat.completions.create(  # type: ignore[attr-defined]
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt + " Return strict JSON only."},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-        )
-        if chat_response.choices:
-            return chat_response.choices[0].message.content or "", None
-    except Exception as exc:
-        logger.error("Chat completions fallback failed: %s", exc)
-        return "", exc
-    return "", last_error
+        structured.append({
+            "speaker": current_speaker,
+            "message": segment.get("text", ""),
+            "timestamp": timestamp,
+        })
 
+    # If no segments, create from full text
+    if not structured and text.strip():
+        structured.append({
+            "speaker": "agent",  # Default speaker for single-entry transcript
+            "message": text.strip(),
+            "timestamp": {"start": "0", "end": ""},
+        })
 
-def _call_openai_json(
-    *,
-    model: str,
-    system_prompt: str,
-    user_content: str,
-    enforce_json_object: bool,
-    temperature: float = 0.3,
-) -> str:
-    text, _ = _call_openai_json_with_error(
-        model=model,
-        system_prompt=system_prompt,
-        user_content=user_content,
-        enforce_json_object=enforce_json_object,
-        temperature=temperature,
-    )
-    return text
-
-
-def _is_context_length_error(error: Optional[BaseException]) -> bool:
-    if not error:
-        return False
-    message = str(error).lower()
-    if "maximum context length" in message or "context length" in message or "too many tokens" in message:
-        return True
-    code = getattr(error, "code", "")
-    if isinstance(code, str) and "context" in code.lower():
-        return True
-    return False
-
-
-def _extract_output_text(response: Any) -> str:
-    try:
-        return response.output[0].content[0].text  # type: ignore[index]
-    except (AttributeError, IndexError, KeyError):
-        return getattr(response, "output_text", "")
-
-
-def _stringify_insight(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        parts = [item for item in (_stringify_insight(v).strip() for v in value) if item]
-        return "\n".join(parts)
-    if isinstance(value, dict):
-        parts = []
-        for key, val in value.items():
-            val_str = _stringify_insight(val)
-            if val_str:
-                parts.append(f"{key}: {val_str}")
-        return "\n".join(parts)
-    return str(value)
-
-
-def transcribe_from_url(audio_url: str) -> TranscriptionResult:
-    temp_path = _download_audio_to_tempfile(audio_url)
-    try:
-        return _transcribe_from_path(temp_path)
-    finally:
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-
-
-def transcribe_from_file_path(path: str) -> TranscriptionResult:
-    return _transcribe_from_path(path)
-
-
-def _status_name(status_obj) -> str:
-    if isinstance(status_obj, str):
-        return status_obj
-    try:
-        return status_obj.name
-    except AttributeError:
-        return str(status_obj)
+    return structured

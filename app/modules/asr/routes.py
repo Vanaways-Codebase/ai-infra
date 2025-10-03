@@ -1,69 +1,88 @@
 import logging
-import mimetypes
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-import math
-from app.modules.recording.service import fetch_recording_bytes, RingCentralRateLimitActive
+from app.modules.recording.service import RingCentralRateLimitActive
 
 from .schemas import (
     AudioProcessingMessageRequest,
+    ContactExtraction,
     TranscriptUtterance,
     TranscribeResponse,
     TranscribeUrlRequest,
+    TranscribeIdRequest
 )
-from .service import _status_name, transcribe_from_file_path, transcribe_from_url
+from .service import transcribe, manual_transcribe
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+# Configure logger for this module
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
+logger.setLevel(logging.INFO)
 
 
 @router.post("/transcribe/url", response_model=TranscribeResponse, summary="Transcribe audio from a URL")
 async def transcribe_url(body: TranscribeUrlRequest) -> TranscribeResponse:
+    """Transcribe audio from a URL"""
     try:
-        transcription_result = await _to_thread(_transcribe_ringcentral_content, str(body.audio_url))
+        transcription_result = await transcribe(url=str(body.audio_url))
+        logger.info("Transcription successful for ID=%s ✅", body.ring_central_id)
         return _build_transcribe_response(transcription_result, ring_central_id=body.ring_central_id)
     except RingCentralRateLimitActive as rle:
-        retry_after = max(1, int(math.ceil(getattr(rle, "retry_after", 30.0))))
-        raise HTTPException(status_code=429, detail="RingCentral rate limit active", headers={"Retry-After": str(retry_after)})
+        retry_after = max(1, int(getattr(rle, "retry_after", 30.0)))
+        raise HTTPException(
+            status_code=429, 
+            detail="RingCentral rate limit active", 
+            headers={"Retry-After": str(retry_after)}
+        )
     except HTTPException:
         raise
-    except Exception as primary_error:
-        logger.warning(
-            "RingCentral download failed for url=%s: %s",
-            body.audio_url,
-            primary_error,
+    except Exception as exc:
+        logger.error("Transcription failed for url=%s: %s", body.audio_url, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to transcribe URL: {exc}") from exc
+
+@router.post("/manual-process", summary="Manually transcribe recent calls")
+async def manual_transcribe_endpoint(limit: int = 1) -> Dict[str, Any]:
+    """Kick off manual transcription for the latest calls."""
+    try:
+        processed = await manual_transcribe(limit=limit)
+        return {"processed": processed, "count": len(processed)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Manual transcription failed for limit=%s: %s", limit, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to manually transcribe: {exc}") from exc
+
+
+@router.post("/transcribe/id", response_model=TranscribeResponse, summary="Transcribe audio from RingCentral recording ID")
+async def transcribe_id(body: TranscribeIdRequest) -> TranscribeResponse:
+    """Transcribe audio from a RingCentral recording ID."""
+    try:
+        transcription_result = await transcribe(recording_id=body.recording_id)
+        logger.info("Transcription successful for recording_id=%s", body.recording_id)
+        return _build_transcribe_response(transcription_result, ring_central_id=body.recording_id)
+    except RingCentralRateLimitActive as rle:
+        retry_after = max(1, int(getattr(rle, "retry_after", 30.0)))
+        raise HTTPException(
+            status_code=429, 
+            detail="RingCentral rate limit active", 
+            headers={"Retry-After": str(retry_after)}
         )
-        try:
-            transcription_result = await _to_thread(transcribe_from_url, str(body.audio_url))
-            return _build_transcribe_response(transcription_result, ring_central_id=body.ring_central_id)
-        except HTTPException:
-            raise
-        except Exception as fallback_error:
-            logger.error(
-                "Fallback transcription failed for url=%s: %s",
-                body.audio_url,
-                fallback_error,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to transcribe URL: {fallback_error or primary_error}",
-            ) from fallback_error
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Transcription failed for recording_id=%s: %s", body.recording_id, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to transcribe recording: {exc}") from exc
 
-
-@router.post(
-    "/transcribe/message",
-    response_model=TranscribeResponse,
-    summary="Transcribe audio message payload (RingCentral queue format)",
-)
-async def transcribe_message(body: AudioProcessingMessageRequest) -> TranscribeResponse:
-    request = TranscribeUrlRequest(audio_url=body.audio_url, ring_central_id=body.ring_central_id)
-    return await transcribe_url(request)
 
 
 @router.post("/transcribe/file", response_model=TranscribeResponse, summary="Transcribe uploaded audio file")
@@ -72,63 +91,38 @@ async def transcribe_file(
 ) -> TranscribeResponse:
     try:
         suffix = os.path.splitext(file.filename or "upload")[1]
-        with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await file.read()
             tmp.write(content)
             tmp.flush()
-            transcription_result = await _to_thread(transcribe_from_file_path, tmp.name)
-        return _build_transcribe_response(transcription_result)
+            tmp_path = tmp.name
+            
+        try:
+            # Use our new async transcribe function directly with the file URL
+            transcription_result = await transcribe(url=f"file://{tmp_path}")
+            return _build_transcribe_response(transcription_result)
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to transcribe file: {exc}")
 
 
-async def _to_thread(func, *args, **kwargs):
-    try:
-        import anyio
-
-        return await anyio.to_thread.run_sync(lambda: func(*args, **kwargs))
-    except Exception:
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
-
-
-def _transcribe_ringcentral_content(audio_url: str):
-    try:
-        data, content_type, filename = fetch_recording_bytes(audio_url, None)
-    except Exception as exc:
-        logger.error("RingCentral fetch failed for url=%s: %s", audio_url, exc)
-        raise
-    suffix = Path(filename).suffix
-    if not suffix:
-        suffix = mimetypes.guess_extension(content_type or "") or ".mp3"
-
-    tmp_path: Optional[str] = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(data)
-            tmp.flush()
-            tmp_path = tmp.name
-        return transcribe_from_file_path(tmp_path)
-    finally:
-        if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-
 def _build_transcribe_response(result, *, ring_central_id: Optional[str] = None) -> TranscribeResponse:
-    status = _status_name(result.status)
-    if status.lower() in {"error", "failed"}:
+    """Build the standardized API response from the transcription result."""
+    # Handle error status
+    if result.status.lower() in {"error", "failed"}:
         raise HTTPException(status_code=400, detail="Transcription failed")
 
     transcription_turns = _normalize_transcription(result.structured_transcript)
     keywords = _normalize_keywords(result.keywords)
     tags = _normalize_tags(result.vehicle_tags)
+    contact_extraction = result.contact_extraction
+    if contact_extraction is None:
+        contact_extraction = ContactExtraction()
 
     return TranscribeResponse(
         ring_central_id=ring_central_id,
@@ -144,7 +138,7 @@ def _build_transcribe_response(result, *, ring_central_id: Optional[str] = None)
         buyer_intent=_safe_float(result.buyer_intent_score),
         buyer_intent_reason=(result.buyer_intent_reason or "").strip() or None,
         agent_recommendation=(result.agent_recommendation or "").strip() or None,
-        contact_extraction=result.contact_extraction or None,
+        contact_extraction=contact_extraction,
     )
 
 
@@ -162,10 +156,10 @@ def _normalize_transcription(data: Optional[List[Dict[str, Any]]]) -> List[Trans
         speaker = str(item.get("speaker") or "").strip().lower()
         if speaker not in {"agent", "customer"}:
             speaker = "agent"
-        timestamp = _normalize_timestamp(item.get("timestamp"))
+        timestamp = _normalize_timestamp(item.get("timestamp") or item.get("start"))
         turns.append(
             TranscriptUtterance(
-                speaker=speaker,  # type: ignore[arg-type]
+                speaker=speaker,
                 message=message,
                 timestamp=timestamp,
             )

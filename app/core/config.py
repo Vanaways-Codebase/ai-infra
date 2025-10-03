@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     
     # Database Settings
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+    MONGODB_CONNECTION_STRING: Optional[str] = os.getenv("MONGODB_CONNECTION_STRING", None)
+    MONGODB_DATABASE_NAME: str = os.getenv("MONGODB_DATABASE_NAME", "vims-ts")
     
     # Groq API Settings
     # Read GROQ_API_KEY and strip surrounding quotes if present (some .env files include quotes)
@@ -34,6 +36,7 @@ class Settings(BaseSettings):
     RINGCENTRAL_CLIENT_ID: str = os.getenv("RINGCENTRAL_CLIENT_ID", "")
     RINGCENTRAL_CLIENT_SECRET: str = os.getenv("RINGCENTRAL_CLIENT_SECRET", "")
     RINGCENTRAL_JWT: str = os.getenv("RINGCENTRAL_JWT", "")
+    RINGCENTRAL_API_URL: str = os.getenv("RINGCENTRAL_API_URL", "https://platform.ringcentral.com")
     RINGCENTRAL_STRICT_RATE_LIMIT: bool = os.getenv("RINGCENTRAL_STRICT_RATE_LIMIT", "true").lower() in {"1", "true", "yes"}
 
     # Azure Service Bus
@@ -45,6 +48,15 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")    
     OPENAI_TRANSCRIPTION_MODEL: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")
     OPENAI_INSIGHTS_MODEL: str = os.getenv("OPENAI_INSIGHTS_MODEL", "gpt-4o-mini")
+
+    # Azure OpenAI Settings
+    AZURE_OPENAI_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY", None)
+    AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT", None)
+    AZURE_OPENAI_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+
+    AZURE_OPENAI_EASTUS_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_API_KEY", None)
+    AZURE_OPENAI_EASTUS_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_ENDPOINT", None)
+    AZURE_OPENAI_EASTUS_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_API_VERSION", "2024-12-01-preview")
     
     class Config:
         env_file = ".env"

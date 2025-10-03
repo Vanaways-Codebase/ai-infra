@@ -14,6 +14,7 @@ from app.core.lifespan import lifespan
 # Middleware imports
 from app.middleware import RequestLoggingMiddleware
 
+
 # Logging configuration
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ app = create_application()
 async def root():
     return {
         "message": "AI Infra is running!",
-        "version": "29b",
+        "version": "3a",
     }
 
 @app.get("/health")
