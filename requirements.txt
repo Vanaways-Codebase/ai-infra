@@ -26,3 +26,4 @@ passlib
 dotenv
 pydantic_settings
 aiohttp==3.12.15
+motor==3.7.1
