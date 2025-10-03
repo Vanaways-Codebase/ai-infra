@@ -25,3 +25,4 @@ python-jose
 passlib
 dotenv
 pydantic_settings
+aiohttp==3.12.15
