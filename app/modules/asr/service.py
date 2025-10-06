@@ -16,6 +16,8 @@ from app.core.openai_client import (
     get_openai_client,
 )
 from app.ringcentral.service import download_audio, get_recording_audio_url
+from app.services.azure.openai.whisper_rateLimiter import whisper_rate_limiter 
+
 
 from .schemas import TranscriptionResult
 
@@ -151,6 +153,10 @@ async def _transcribe_file(file_path: Path) -> TranscriptionResult:
     Returns:
         TranscriptionResult object
     """
+
+    # Acquire rate limit permission before making the API call
+    await whisper_rate_limiter.acquire()
+
     client = get_azure_openai_whisper_client()
     model = "whisper"
 
@@ -376,7 +382,7 @@ async def _analyze_transcript(text: str, structured_transcript: List[Dict[str, A
         result = json.loads(content)
 
         # Debug output of the parsed result
-        print("\n\nANALYSIS RESULT", result)
+        # print("\n\nANALYSIS RESULT", result)
 
         return result
     except Exception as e:

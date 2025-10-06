@@ -21,7 +21,7 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler()
         
         # Register your cron jobs here
-        self._register_jobs()
+        # self._register_jobs()
         
         self.scheduler.start()
         logger.info("Scheduler started")
@@ -44,7 +44,7 @@ class SchedulerService:
         # Running every 30 min with 50 calls = 2,400 calls/day capacity (more than enough)
         self.scheduler.add_job(
             func=lambda: process_ringcentral_calls(batch_size=50),
-            trigger=IntervalTrigger(minutes=30),
+            trigger=IntervalTrigger(minutes=10),
             id="process_calls",
             name="Process RingCentral Calls",
             replace_existing=True,
