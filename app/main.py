@@ -51,10 +51,10 @@ from app.modules.asr.cron import process_ringcentral_calls
 
 @app.get("/", tags=["App"], summary="App Version")
 async def root():
-    await process_ringcentral_calls(10)
+    # await process_ringcentral_calls(10)
     return {
         "message": "AI Infra is running!",
-        "version": "6a",
+        "version": "7a",
     }
 
 @app.get("/health")

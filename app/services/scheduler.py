@@ -21,7 +21,7 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler()
         
         # Register your cron jobs here
-        # self._register_jobs()
+        self._register_jobs()
         
         self.scheduler.start()
         logger.info("Scheduler started")
@@ -38,25 +38,28 @@ class SchedulerService:
     def _register_jobs(self):
         """Register all cron jobs."""
         from app.modules.asr.cron import process_ringcentral_calls
-        
-       # Process 50 calls every 30 minutes
-        # 500 calls/day = ~21 calls/hour = ~50 calls per 2.5 hours
-        # Running every 30 min with 50 calls = 2,400 calls/day capacity (more than enough)
+
+        # Calculate safe interval based on rate limits
+        CALLS_PER_BATCH = 3  # Process 3 calls per batch
+        RATE_LIMIT_RPM = 3  # 3 requests per minute
+        PROCESSING_BUFFER = 1.5  # Buffer multiplier for safety
+
+        # Safe interval = (batch size / rate limit) * buffer
+        SAFE_INTERVAL = int((CALLS_PER_BATCH / RATE_LIMIT_RPM) * PROCESSING_BUFFER)
+    
+
         self.scheduler.add_job(
-            func=lambda: process_ringcentral_calls(batch_size=50),
-            trigger=IntervalTrigger(minutes=10),
+            func=process_ringcentral_calls,
+            trigger=IntervalTrigger(minutes=SAFE_INTERVAL),
             id="process_calls",
             name="Process RingCentral Calls",
             replace_existing=True,
-            max_instances=1  # Don't run if previous job is still running
+            max_instances=1,
+            kwargs={"batch_size": CALLS_PER_BATCH} 
         )
-        
-        logger.info("📅 Scheduled: Process 50 calls every 30 minutes")
 
-
-        
+        logger.info(f"📅 Scheduled: Process {CALLS_PER_BATCH} calls every {SAFE_INTERVAL} minutes")
         logger.info("Cron jobs registered")
-
 
 # Global scheduler instance
 scheduler = SchedulerService()
