@@ -22,7 +22,7 @@ def get_azure_openai_client():
     """
     client = AzureOpenAI(
         api_key=settings.AZURE_OPENAI_API_KEY,
-        api_version=settings.AZURE_OPENAI_API_VERSION or "2024-12-01-preview",
+        api_version=settings.AZURE_OPENAI_API_VERSION,
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
     )
     return client
@@ -41,3 +41,16 @@ def get_azure_openai_eastus_client():
         azure_endpoint=settings.AZURE_OPENAI_EASTUS_ENDPOINT
     )
     return client
+
+
+@lru_cache(maxsize=1)
+def get_azure_openai_whisper_client() -> AzureOpenAI:
+    """
+    Get Azure OpenAI client for Whisper transcription.
+    Uses the dedicated Whisper endpoint and deployment.
+    """
+    return AzureOpenAI(
+        api_key=settings.AZURE_OPENAI_WHISPER_API_KEY,
+        api_version=settings.AZURE_OPENAI_WHISPER_API_VERSION,
+        azure_endpoint=settings.AZURE_OPENAI_WHISPER_ENDPOINT
+    )

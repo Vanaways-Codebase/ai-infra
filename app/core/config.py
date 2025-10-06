@@ -54,10 +54,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT", None)
     AZURE_OPENAI_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
 
-    AZURE_OPENAI_EASTUS_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_API_KEY", None)
-    AZURE_OPENAI_EASTUS_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_ENDPOINT", None)
-    AZURE_OPENAI_EASTUS_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_EASTUS_API_VERSION", "2024-12-01-preview")
-    
+    AZURE_OPENAI_WHISPER_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_API_KEY", None)
+    AZURE_OPENAI_WHISPER_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_ENDPOINT", None)
+    AZURE_OPENAI_WHISPER_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_API_VERSION", None)
+
     class Config:
         env_file = ".env"
         case_sensitive = True

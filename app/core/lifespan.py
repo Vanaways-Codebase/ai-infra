@@ -4,9 +4,13 @@ import warnings
 import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+
 from app.services.azure.service_bus import ServiceBusManager
+from app.services.scheduler import scheduler
+
 from app.core.config import settings
 from app.core.database.mongodb import db
+
 
 # Configure logger
 logging.basicConfig(
@@ -23,6 +27,7 @@ service_bus_manager = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI application."""
     global service_bus_manager
     
     # Startup
@@ -33,14 +38,21 @@ async def lifespan(app: FastAPI):
     service_bus_manager = ServiceBusManager()
     
     # Start listening to queues in background
-    await service_bus_manager.start()
+    # await service_bus_manager.start()
+
+    # Start Scheduler
+    scheduler.start()
     
     yield
     
     # Shutdown
+
+    # Stop Scheduler
+    scheduler.stop()
+
     logger.info("🔌 Disconnecting from MongoDB...")
     await db.disconnect()
     
     logger.info("🛑 Shutting down Service Bus Manager...")
-    if service_bus_manager:
-        await service_bus_manager.stop()
+    # if service_bus_manager:
+    #     await service_bus_manager.stop()

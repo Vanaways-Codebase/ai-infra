@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 from app.core.config import settings
 from app.core.database.mongodb import db
 from app.core.openai_client import (
+    get_azure_openai_whisper_client,
     get_azure_openai_client,
-    get_azure_openai_eastus_client,
     get_openai_client,
 )
 from app.ringcentral.service import download_audio, get_recording_audio_url
@@ -151,8 +151,8 @@ async def _transcribe_file(file_path: Path) -> TranscriptionResult:
     Returns:
         TranscriptionResult object
     """
-    client = get_openai_client()
-    model = (settings.OPENAI_TRANSCRIPTION_MODEL or "").strip() or "whisper-1"
+    client = get_azure_openai_whisper_client()
+    model = "whisper"
 
     # Use asyncio.to_thread for non-async operations
     def _transcribe():
@@ -162,7 +162,15 @@ async def _transcribe_file(file_path: Path) -> TranscriptionResult:
                 file=file_stream,
                 response_format="verbose_json",
                 timestamp_granularities=["word", "segment"],
-                prompt="This is a sales call recording between a customer and a sales agent of Vanaways. Please identify and separate the speakers accurately. The conversation involves a customer inquiry and agent responses about products or services. Ensure proper speaker diarization to distinguish between customer and agent throughout the call. Also identify and mark any voicemail messages and hold ringtones/music that may occur during the call."
+                prompt=(
+                    "This is a sales call recording between a customer and a sales agent from Vanaways. "
+                    "Please accurately identify and separate the speakers throughout the conversation. "
+                    "The call includes customer inquiries and agent responses about products or services. "
+                    "Ensure clear speaker diarization to distinguish between the customer and the agent. "
+                    "Additionally, detect and label any voicemail messages or hold music/ringtones present in the audio. "
+                    "If the file contains no audio, is silent, or only contains noise, do not generate a transcript. "
+                    'Instead, return the message: "No audio detected, transcript not generated."'
+                )
             )
 
     transcript = await asyncio.to_thread(_transcribe)
@@ -319,7 +327,7 @@ async def _analyze_transcript(text: str, structured_transcript: List[Dict[str, A
 
     # Use OpenAI to analyze the transcript
     try:
-        client = get_openai_client()
+        client = get_azure_openai_client()
 
         # Build prompt with structured format
         conversation = "\n".join([
@@ -342,6 +350,8 @@ async def _analyze_transcript(text: str, structured_transcript: List[Dict[str, A
         - vehicle_tags as Tags: Extract all vehicle-related terms from this conversation (makes, models, types). Count frequency of each term.
         - Purchase intent signals and next steps
         - Any customer contact details shared
+
+        NOTE: If the transcript is empty or lacks meaningful content, respond with null, empty lists, or 0 for all fields as appropriate."
         
         Provide a complete analysis with insights that would help Vanaways improve their sales process."""
 

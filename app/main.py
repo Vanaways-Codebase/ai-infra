@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 # FastAPI imports
@@ -45,11 +46,15 @@ def create_application() -> FastAPI:
 
 app = create_application()
 
+
+from app.modules.asr.cron import process_ringcentral_calls
+
 @app.get("/", tags=["App"], summary="App Version")
 async def root():
+    # await process_ringcentral_calls(1)
     return {
         "message": "AI Infra is running!",
-        "version": "3a",
+        "version": "6a",
     }
 
 @app.get("/health")
