@@ -24,7 +24,7 @@ async def process_ringcentral_calls(batch_size: int = 10):
 
         cursor = collection.find(
             {
-            "transcriptionStatus": "pending",
+            "transcriptionStatus": {"$in": ["pending", "failed"]},
             "ringCentralId": {"$exists": True, "$ne": None},
             "recordingUrl": {"$exists": True, "$ne": None},
             "createdAt": {"$gte": current_month_start},
