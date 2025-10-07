@@ -54,7 +54,7 @@ async def root():
     # await process_ringcentral_calls(10)
     return {
         "message": "AI Infra is running!",
-        "version": "7a",
+        "version": "7b",
     }
 
 @app.get("/health")

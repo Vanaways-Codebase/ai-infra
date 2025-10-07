@@ -2,6 +2,7 @@ from app.core.database.mongodb import db
 from app.modules.asr.service import transcribe
 import logging
 from typing import Any
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,15 @@ async def process_ringcentral_calls(batch_size: int = 10):
     
     try:
         # Find calls that need transcription
+        now = datetime.utcnow()
+        current_month_start = datetime(now.year, now.month, 1)
+
         cursor = collection.find(
             {
-                "transcriptionStatus": "pending",
-                "ringCentralId": {"$exists": True, "$ne": None},
-                "recordingUrl": {"$exists": True, "$ne": None},
+            "transcriptionStatus": "pending",
+            "ringCentralId": {"$exists": True, "$ne": None},
+            "recordingUrl": {"$exists": True, "$ne": None},
+            "createdAt": {"$gte": current_month_start},
             },
             limit=batch_size
         ).sort("createdAt", -1)  # Newest first
