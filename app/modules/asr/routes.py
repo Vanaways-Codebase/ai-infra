@@ -2,11 +2,12 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.modules.recording.service import RingCentralRateLimitActive
+from pydantic import ValidationError
 
 from .schemas import (
     AudioProcessingMessageRequest,
@@ -14,7 +15,8 @@ from .schemas import (
     TranscriptUtterance,
     TranscribeResponse,
     TranscribeUrlRequest,
-    TranscribeIdRequest
+    TranscribeIdRequest,
+    VehicleTag,
 )
 from .service import transcribe, manual_transcribe
 
@@ -197,27 +199,20 @@ def _normalize_keywords(raw: Optional[List[Any]]) -> List[str]:
     return keywords
 
 
-def _normalize_tags(raw: Optional[Dict[str, Any]]) -> List[str]:
+def _normalize_tags(raw: Optional[Sequence[Any]]) -> List[VehicleTag]:
     if not raw:
         return []
-    tags: List[str] = []
-    for key, value in raw.items():
-        key_text = str(key).strip()
-        if not key_text:
+    tags: List[VehicleTag] = []
+    for item in raw:
+        if isinstance(item, VehicleTag):
+            tags.append(item)
             continue
-        count = 1
-        try:
-            count_candidate = int(value)
-            if count_candidate > 0:
-                count = count_candidate
-        except (TypeError, ValueError):
-            count = 1
-        tags.extend([key_text] * count)
-    deduped: List[str] = []
-    for tag in tags:
-        if tag not in deduped:
-            deduped.append(tag)
-    return deduped
+        if isinstance(item, dict):
+            try:
+                tags.append(VehicleTag.model_validate(item))
+            except ValidationError:
+                continue
+    return tags
 
 
 def _safe_float(value: Optional[Any], default: float = 0.0) -> float:

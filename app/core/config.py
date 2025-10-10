@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT", None)
     AZURE_OPENAI_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
 
+    # Whisper Configuration
+    USE_LOCAL_WHISPER: bool = os.getenv("USE_LOCAL_WHISPER", "False").lower() == "true"
+    LOCAL_WHISPER_MODEL: str = os.getenv("LOCAL_WHISPER_MODEL", "base")  # tiny, base, small, medium, large
+    
     AZURE_OPENAI_WHISPER_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_API_KEY", None)
     AZURE_OPENAI_WHISPER_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_ENDPOINT", None)
     AZURE_OPENAI_WHISPER_API_VERSION: Optional[str] = os.getenv("AZURE_OPENAI_WHISPER_API_VERSION", None)

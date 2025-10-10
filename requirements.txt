@@ -30,3 +30,9 @@ motor==3.7.1
 
 # Scheduler
 apscheduler==3.11.0
+
+# Local Whisper dependencies
+openai-whisper
+torch
+torchaudio
+ffmpeg-python

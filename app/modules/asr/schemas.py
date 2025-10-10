@@ -37,6 +37,13 @@ class ContactExtraction(BaseModel):
     city: Optional[str] = None
 
 
+class VehicleTag(BaseModel):
+    """Structured metadata for a vehicle-related tag."""
+    tag: str
+    count: int
+    color: str
+
+
 class TranscribeResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -47,7 +54,10 @@ class TranscribeResponse(BaseModel):
     sentiment_score: float = Field(default=0, serialization_alias="sentimentScore")
     keywords: List[str] = Field(default_factory=list)
     transcription: List[TranscriptUtterance] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
+    tags: List[VehicleTag] = Field(
+        default_factory=list,
+        description="Vehicle tags with display metadata."
+    )
     summary: str = Field(default="")
     call_analysis: Optional[str] = Field(default=None, serialization_alias="callAnalysis")
     buyer_intent: float = Field(default=0, serialization_alias="buyerIntent")
@@ -90,7 +100,12 @@ class TranscriptionResult(BaseModel):
     customer_rating: Optional[float] = Field(default=None, serialization_alias="rating")
     call_type: Optional[str] = None
     summary: Optional[str] = None
-    vehicle_tags: Optional[Dict[str, str]] = Field(default=None, serialization_alias="tags")
+    vehicle_tags: Optional[List[VehicleTag]] = Field(
+        default=None,
+        serialization_alias="tags",
+        description="List of vehicle tags with 'tag', 'count', and 'color' keys.",
+        example=[{'tag': 'SUV', 'count': 3, 'color': 'blue'}]
+    )
     contact_extraction: Optional[ContactExtraction] = Field(default=None, serialization_alias="contacts")
 
     def model_dump(self, *args, **kwargs) -> Dict[str, Any]:  # type: ignore[override]

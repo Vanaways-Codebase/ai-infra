@@ -1,8 +1,9 @@
 from app.core.database.mongodb import db
-from app.modules.asr.service import transcribe
+from app.modules.asr.service import transcribe, calculate_enhanced_status
 import logging
 from typing import Any
 from datetime import datetime
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -43,32 +44,71 @@ async def process_ringcentral_calls(batch_size: int = 10):
 
                 # Transcribe the audio
                 transcription_result = await transcribe(url=str(recording_url))
-                result_dict = transcription_result.dict()
-                
+
                 logger.info(f"✅ Transcription complete for: {ringcentral_id}")
 
+                summary_value = (transcription_result.summary or transcription_result.call_summary or "").strip()
+                contact_model = transcription_result.contact_extraction
+                contact_data = contact_model.model_dump(exclude_none=True) if contact_model else None
+                tags_payload = [
+                    tag.model_dump() for tag in (transcription_result.vehicle_tags or [])
+                ]
+                structured_transcript = transcription_result.structured_transcript or []
+                keywords = transcription_result.keywords or []
+                sentiment_score = transcription_result.sentiment_analysis
+                buyer_intent_reason = transcription_result.buyer_intent_reason
+                buyer_intent_score = transcription_result.buyer_intent_score
+                call_analysis_text = transcription_result.call_analysis
+                agent_recommendation = transcription_result.agent_recommendation
+                mql_score = transcription_result.mql_assessment
+                rating = transcription_result.customer_rating
+                call_type = transcription_result.call_type
+
+                ### Analyze Call Enhanced Status ###
+
+                ## Finding Call In Collection
+                call_in_db = await collection.find_one({"_id": ObjectId(call_id)})
+                if not call_in_db:
+                    logger.warning(f"❌ Call not found in DB for ID: {call_id}")
+                    continue
+
+                ## Calculate Enhanced Status
+                enhanced_status_payload = {
+                    "call_status": call_in_db.get("callStatus"),
+                    "missed_call": call_in_db.get("missedCall"),
+                    "direction": call_in_db.get("direction"),
+                    "summary": summary_value,
+                    "transcription_status": "completed",
+                    "recording_url": recording_url,
+                    "to_number": call_in_db.get("toNumber"),
+                }
+
+                enhanced_status = await calculate_enhanced_status(enhanced_status_payload)
+                logger.info(f"\n**Enhanced status for {ringcentral_id}: {enhanced_status}")
+                
                 # Save transcription results to database
                 await collection.update_one(
                     {"_id": call_id},
                     {
                         "$set": {
                             "transcriptionStatus": "completed",
-                            "summary": result_dict.get("call_summary"),
-                            "callAnalysis": result_dict.get("call_analysis"),
-                            "buyerIntent": result_dict.get("buyer_intent_score"),
-                            "buyerIntentReason": result_dict.get("buyer_intent_reason"),
-                            "agentRecommendation": result_dict.get("agent_recommendation"),
-                            "transcription": result_dict.get("structured_transcript"),
-                            "keywords": result_dict.get("keywords"),
-                            "keywordStatus": "completed" if result_dict.get("keywords") else "pending",
-                            "mqlScore": result_dict.get("mql_assessment"),
-                            "sentimentScore": result_dict.get("sentiment_analysis"),
-                            "sentimentStatus": "completed" if result_dict.get("sentiment_analysis") is not None else "pending",
-                            "rating": result_dict.get("customer_rating"),
-                            "callType": result_dict.get("call_type"),
-                            "tags": result_dict.get("vehicle_tags"),
+                            "summary": summary_value,
+                            "callAnalysis": call_analysis_text,
+                            "buyerIntent": buyer_intent_score,
+                            "buyerIntentReason": buyer_intent_reason,
+                            "agentRecommendation": agent_recommendation,
+                            "transcription": structured_transcript,
+                            "keywords": keywords,
+                            "keywordStatus": "completed" if keywords else "pending",
+                            "mqlScore": mql_score,
+                            "sentimentScore": sentiment_score,
+                            "sentimentStatus": "completed" if sentiment_score is not None else "pending",
+                            "rating": rating,
+                            "callType": call_type,
+                            "tags": tags_payload,
+                            "enhancedStatus": enhanced_status,
                             "metadata": call.get("metadata", {}) or {
-                                "contact": result_dict.get("contact_extraction"),
+                                "contact": contact_data,
                             }
                         }
                     }
@@ -78,7 +118,7 @@ async def process_ringcentral_calls(batch_size: int = 10):
                 customer_id = call.get("customerId")
                 if customer_id:
                     customer_collection = db.get_collection("customers")
-                    contact = result_dict.get("contact_extraction", {})
+                    contact = contact_data or {}
                     
                     await customer_collection.update_one(
                         {"_id": customer_id},
@@ -86,7 +126,8 @@ async def process_ringcentral_calls(batch_size: int = 10):
                             "$set": {
                                 "name": contact.get("name", "Unknown"),
                                 "email": contact.get("email", "Unknown"),
-                                "address": contact.get("address", "Unknown"),
+                                "address": contact.get("address", ""),
+
                             }
                         }
                     )
